@@ -1,4 +1,4 @@
-import { Router, type Router as ExpressRouter } from "express";
+import { Router, type Request, type Router as ExpressRouter } from "express";
 import multer from "multer";
 import {
   createCommentSchema,
@@ -19,7 +19,11 @@ const postUpload = multer({
     fileSize: 25 * 1024 * 1024,
     files: 4
   },
-  fileFilter: (_request, file, callback) => {
+  fileFilter: (
+    _request: Request,
+    file: { mimetype: string },
+    callback: (error: Error | null, acceptFile?: boolean) => void
+  ) => {
     if (!isSupportedMediaMimeType(file.mimetype)) {
       callback(new Error("Only image and video uploads are supported."));
       return;

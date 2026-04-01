@@ -1,14 +1,22 @@
 import type { Express, NextFunction, Request, Response } from "express";
 import cookieParser from "cookie-parser";
 import express from "express";
-import multer from "multer";
 import { authRouter } from "./routes/auth.js";
 import { postsRouter } from "./routes/posts.js";
 import { usersRouter } from "./routes/users.js";
+import { applyCors } from "./lib/cors.js";
 import { attachAuthUser } from "./middleware/auth.js";
 
 export const app: Express = express();
 
+function isMulterLikeError(error: unknown): error is Error & { code?: string; name?: string } {
+  return (
+    error instanceof Error &&
+    (error.name === "MulterError" || (typeof error === "object" && error !== null && "code" in error))
+  );
+}
+
+app.use(applyCors);
 app.use(express.json());
 app.use(cookieParser());
 app.use(attachAuthUser);
@@ -26,7 +34,7 @@ app.use(usersRouter);
 app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
   console.error(error);
 
-  if (error instanceof multer.MulterError) {
+  if (isMulterLikeError(error)) {
     response.status(400).json({
       message:
         error.code === "LIMIT_FILE_SIZE"

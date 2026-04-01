@@ -17,6 +17,20 @@ const jwtExpiresIn = jwtExpiresInRaw as SignOptions["expiresIn"];
 const isProduction = process.env.NODE_ENV === "production";
 const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
 
+function getCookieSameSite() {
+  const configured = process.env.AUTH_COOKIE_SAME_SITE?.toLowerCase();
+
+  if (configured === "strict" || configured === "lax" || configured === "none") {
+    return configured;
+  }
+
+  return isProduction ? "none" : "lax";
+}
+
+function getCookieSecure() {
+  return isProduction || getCookieSameSite() === "none";
+}
+
 function getCookieMaxAge() {
   if (jwtExpiresInRaw.endsWith("d")) {
     const days = Number.parseInt(jwtExpiresInRaw, 10);
@@ -47,8 +61,8 @@ export function verifyAuthToken(token: string) {
 export function setAuthCookie(response: Response, token: string) {
   response.cookie(authCookieName, token, {
     httpOnly: true,
-    sameSite: "lax",
-    secure: isProduction,
+    sameSite: getCookieSameSite(),
+    secure: getCookieSecure(),
     path: "/",
     maxAge: getCookieMaxAge()
   });
@@ -57,8 +71,8 @@ export function setAuthCookie(response: Response, token: string) {
 export function clearAuthCookie(response: Response) {
   response.clearCookie(authCookieName, {
     httpOnly: true,
-    sameSite: "lax",
-    secure: isProduction,
+    sameSite: getCookieSameSite(),
+    secure: getCookieSecure(),
     path: "/"
   });
 }

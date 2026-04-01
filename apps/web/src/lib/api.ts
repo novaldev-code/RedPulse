@@ -8,10 +8,24 @@ export class ApiError extends Error {
   }
 }
 
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
+
+function resolveApiUrl(input: string) {
+  if (/^https?:\/\//i.test(input)) {
+    return input;
+  }
+
+  if (!apiBaseUrl) {
+    return input;
+  }
+
+  return `${apiBaseUrl}${input.startsWith("/") ? input : `/${input}`}`;
+}
+
 export async function apiFetch<T>(input: string, init?: RequestInit): Promise<T> {
   const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
 
-  const response = await fetch(input, {
+  const response = await fetch(resolveApiUrl(input), {
     credentials: "include",
     headers: {
       ...(isFormData ? {} : { "Content-Type": "application/json" }),
