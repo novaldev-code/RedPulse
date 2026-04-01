@@ -1,10 +1,25 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { toggleFollowParamsSchema, updateProfileSchema } from "@redpulse/validation";
+import { createRateLimiter } from "../lib/rate-limit.js";
 import { authenticate } from "../middleware/auth.js";
 import { getProfileSummary, getPublicProfile, getSuggestedUsers, toggleFollow } from "../services/social-service.js";
 import { updateProfile } from "../services/auth-service.js";
 
 export const usersRouter: ExpressRouter = Router();
+
+const profileUpdateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyPrefix: "profile-update",
+  message: "Perubahan profil terlalu sering. Coba lagi beberapa menit lagi."
+});
+
+const followLimiter = createRateLimiter({
+  windowMs: 5 * 60 * 1000,
+  max: 50,
+  keyPrefix: "follow",
+  message: "Aksi follow terlalu cepat. Coba lagi sebentar."
+});
 
 usersRouter.get("/api/profile/me", authenticate, async (request, response) => {
   const profile = await getProfileSummary(request.user!.id);
@@ -19,7 +34,7 @@ usersRouter.get("/api/profile/me", authenticate, async (request, response) => {
   response.json({ profile });
 });
 
-usersRouter.patch("/api/profile/me", authenticate, async (request, response) => {
+usersRouter.patch("/api/profile/me", authenticate, profileUpdateLimiter, async (request, response) => {
   const parsed = updateProfileSchema.safeParse(request.body);
 
   if (!parsed.success) {
@@ -70,7 +85,7 @@ usersRouter.get("/api/users/:id/profile", async (request, response) => {
   response.json(profile);
 });
 
-usersRouter.post("/api/users/:id/follow", authenticate, async (request, response) => {
+usersRouter.post("/api/users/:id/follow", authenticate, followLimiter, async (request, response) => {
   const parsed = toggleFollowParamsSchema.safeParse(request.params);
 
   if (!parsed.success) {

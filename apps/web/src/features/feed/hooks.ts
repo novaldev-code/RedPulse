@@ -1,13 +1,18 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryKey } from "@tanstack/react-query";
 import type {
   ConversationMessagesResponse,
   ConversationsResponse,
   CreateCommentInput,
+  MarkNotificationsReadResponse,
+  NotificationsResponse,
   PostCommentsResponse,
+  CurrentProfileResponse,
   FeedResponse,
+  FeedScope,
   GoogleAuthInput,
   LoginInput,
   RegisterInput,
+  SavedPostsResponse,
   SendDirectMessageInput,
   SafeUser,
   UpdateProfileInput,
@@ -18,25 +23,35 @@ import {
   getConversations,
   createComment,
   createPost,
+  deleteComment,
+  deletePost,
   getComments,
   getCurrentUser,
   getGoogleConfig,
+  getNotifications,
   getPosts,
   getPublicProfile,
   getProfileSummary,
+  getSavedPosts,
   getSuggestedUsers,
   loginUser,
   loginWithGoogle,
+  markNotificationsRead,
   logoutUser,
   registerUser,
   sendDirectMessage,
   toggleFollow,
   toggleLike,
+  toggleSave,
+  updateComment,
   updateProfile
 } from "./api";
 import type { CreatePostPayload } from "./api";
 
+type FeedItem = FeedResponse["items"][number];
+
 export const postsQueryKey = ["posts"] as const;
+export const postsFeedQueryKey = (scope: FeedScope) => [...postsQueryKey, scope] as const;
 export const commentsQueryKey = (postId: string) => ["comments", postId] as const;
 export const currentUserQueryKey = ["current-user"] as const;
 export const profileSummaryQueryKey = ["profile-summary"] as const;
@@ -45,13 +60,45 @@ export const suggestedUsersQueryKey = ["suggested-users"] as const;
 export const googleConfigQueryKey = ["google-config"] as const;
 export const conversationsQueryKey = ["conversations"] as const;
 export const conversationMessagesQueryKey = (conversationId: string) => ["conversation-messages", conversationId] as const;
+export const notificationsQueryKey = ["notifications"] as const;
+export const savedPostsQueryKey = ["saved-posts"] as const;
 
-export function usePostsQuery() {
+function getPreviousFeedQueries(queryClient: ReturnType<typeof useQueryClient>) {
+  return queryClient.getQueriesData<InfiniteData<FeedResponse>>({ queryKey: postsQueryKey });
+}
+
+function restorePreviousFeedQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  previousFeeds: Array<[QueryKey, InfiniteData<FeedResponse> | undefined]>,
+) {
+  for (const [queryKey, data] of previousFeeds) {
+    queryClient.setQueryData(queryKey, data);
+  }
+}
+
+function updateFeedQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  updater: (current: InfiniteData<FeedResponse>) => InfiniteData<FeedResponse>,
+) {
+  queryClient.setQueriesData<InfiniteData<FeedResponse>>(
+    { queryKey: postsQueryKey },
+    (current) => {
+      if (!current) {
+        return current;
+      }
+
+      return updater(current);
+    },
+  );
+}
+
+export function usePostsQuery(scope: FeedScope, enabled = true) {
   return useInfiniteQuery({
-    queryKey: postsQueryKey,
+    queryKey: postsFeedQueryKey(scope),
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam }) => getPosts(pageParam),
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined
+    queryFn: ({ pageParam }) => getPosts(pageParam, scope),
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled
   });
 }
 
@@ -98,20 +145,22 @@ export function useSuggestedUsersQuery(enabled: boolean) {
   });
 }
 
-export function useGoogleConfigQuery() {
+export function useGoogleConfigQuery(enabled: boolean) {
   return useQuery({
     queryKey: googleConfigQueryKey,
     queryFn: getGoogleConfig,
+    enabled,
     retry: false
   });
 }
 
-export function useConversationsQuery(enabled: boolean) {
+export function useConversationsQuery(enabled: boolean, isActive = false) {
   return useQuery({
     queryKey: conversationsQueryKey,
     queryFn: getConversations,
     enabled,
-    retry: false
+    retry: false,
+    refetchInterval: enabled ? (isActive ? 8000 : 30000) : false
   });
 }
 
@@ -120,6 +169,26 @@ export function useConversationMessagesQuery(conversationId: string | null, enab
     queryKey: conversationId ? conversationMessagesQueryKey(conversationId) : ["conversation-messages", "idle"],
     queryFn: () => getConversationMessages(conversationId!),
     enabled: enabled && Boolean(conversationId),
+    retry: false,
+    refetchInterval: enabled && Boolean(conversationId) ? 5000 : false
+  });
+}
+
+export function useNotificationsQuery(enabled: boolean, isActive = false) {
+  return useQuery({
+    queryKey: notificationsQueryKey,
+    queryFn: getNotifications,
+    enabled,
+    retry: false,
+    refetchInterval: enabled ? (isActive ? 10000 : 30000) : false
+  });
+}
+
+export function useSavedPostsQuery(enabled: boolean) {
+  return useQuery({
+    queryKey: savedPostsQueryKey,
+    queryFn: getSavedPosts,
+    enabled,
     retry: false
   });
 }
@@ -132,59 +201,128 @@ export function useToggleLikeMutation() {
     onMutate: async (postId) => {
       await queryClient.cancelQueries({ queryKey: postsQueryKey });
 
-      const previousFeed = queryClient.getQueryData<InfiniteData<FeedResponse>>(postsQueryKey);
+      const previousFeeds = getPreviousFeedQueries(queryClient);
 
-      queryClient.setQueryData<InfiniteData<FeedResponse>>(postsQueryKey, (current) => {
-        if (!current) {
-          return current;
-        }
+      updateFeedQueries(queryClient, (current) => ({
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          items: page.items.map((item) =>
+            item.id === postId
+              ? {
+                  ...item,
+                  likedByMe: !item.likedByMe,
+                  likeCount: Math.max(0, item.likeCount + (item.likedByMe ? -1 : 1))
+                }
+              : item
+          )
+        }))
+      }));
 
-        return {
-          ...current,
-          pages: current.pages.map((page) => ({
-            ...page,
-            items: page.items.map((item) =>
-              item.id === postId
-                ? {
-                    ...item,
-                    likedByMe: !item.likedByMe,
-                    likeCount: Math.max(0, item.likeCount + (item.likedByMe ? -1 : 1))
-                  }
-                : item
-            )
-          }))
-        };
-      });
-
-      return { previousFeed };
+      return { previousFeeds };
     },
     onError: (_error, _postId, context) => {
-      if (context?.previousFeed) {
-        queryClient.setQueryData(postsQueryKey, context.previousFeed);
+      if (context?.previousFeeds) {
+        restorePreviousFeedQueries(queryClient, context.previousFeeds);
       }
     },
     onSuccess: (result) => {
-      queryClient.setQueryData<InfiniteData<FeedResponse>>(postsQueryKey, (current) => {
-        if (!current) {
-          return current;
-        }
+      updateFeedQueries(queryClient, (current) => ({
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          items: page.items.map((item) =>
+            item.id === result.postId
+              ? {
+                  ...item,
+                  likedByMe: result.likedByMe,
+                  likeCount: result.likeCount
+                }
+              : item
+          )
+        }))
+      }));
+    }
+  });
+}
 
-        return {
-          ...current,
-          pages: current.pages.map((page) => ({
-            ...page,
-            items: page.items.map((item) =>
-              item.id === result.postId
-                ? {
-                    ...item,
-                    likedByMe: result.likedByMe,
-                    likeCount: result.likeCount
-                  }
-                : item
-            )
-          }))
-        };
-      });
+export function useToggleSaveMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: toggleSave,
+    onMutate: async (postId) => {
+      await queryClient.cancelQueries({ queryKey: postsQueryKey });
+      await queryClient.cancelQueries({ queryKey: savedPostsQueryKey });
+
+      const previousFeeds = getPreviousFeedQueries(queryClient);
+      const previousSavedPosts = queryClient.getQueryData<SavedPostsResponse>(savedPostsQueryKey);
+
+      let toggledItem: FeedItem | undefined;
+
+      updateFeedQueries(queryClient, (current) => ({
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          items: page.items.map((item) => {
+            if (item.id !== postId) {
+              return item;
+            }
+
+            toggledItem = {
+              ...item,
+              savedByMe: !item.savedByMe
+            };
+
+            return toggledItem;
+          })
+        }))
+      }));
+
+      if (toggledItem) {
+        const nextToggledItem = toggledItem;
+
+        queryClient.setQueryData<SavedPostsResponse | undefined>(savedPostsQueryKey, (current) => {
+          if (!current) {
+            return nextToggledItem.savedByMe ? { items: [nextToggledItem] } : { items: [] };
+          }
+
+          const filtered = current.items.filter((item) => item.id !== postId);
+
+          return nextToggledItem.savedByMe
+            ? { items: [nextToggledItem, ...filtered] }
+            : { items: filtered };
+        });
+      }
+
+      return { previousFeeds, previousSavedPosts };
+    },
+    onError: (_error, _postId, context) => {
+      if (context?.previousFeeds) {
+        restorePreviousFeedQueries(queryClient, context.previousFeeds);
+      }
+
+      if (context?.previousSavedPosts) {
+        queryClient.setQueryData(savedPostsQueryKey, context.previousSavedPosts);
+      }
+    },
+    onSuccess: async (result) => {
+      updateFeedQueries(queryClient, (current) => ({
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          items: page.items.map((item) =>
+            item.id === result.postId
+              ? {
+                  ...item,
+                  savedByMe: result.savedByMe
+                }
+              : item
+          )
+        }))
+      }));
+
+      await queryClient.invalidateQueries({ queryKey: savedPostsQueryKey });
     }
   });
 }
@@ -227,6 +365,7 @@ export function useLogoutMutation(onSuccess: () => void) {
     onSuccess: async () => {
       queryClient.setQueryData(currentUserQueryKey, null);
       queryClient.setQueryData(profileSummaryQueryKey, null);
+      queryClient.setQueryData(savedPostsQueryKey, null);
       await queryClient.invalidateQueries({ queryKey: postsQueryKey });
       await queryClient.invalidateQueries({ queryKey: suggestedUsersQueryKey });
       onSuccess();
@@ -262,6 +401,68 @@ export function useCreatePostMutation(onSuccess?: () => void) {
   });
 }
 
+export function useDeletePostMutation(onSuccess?: () => void) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (postId: string) => deletePost(postId),
+    onMutate: async (postId) => {
+      await queryClient.cancelQueries({ queryKey: postsQueryKey });
+      await queryClient.cancelQueries({ queryKey: profileSummaryQueryKey });
+
+      const previousFeeds = getPreviousFeedQueries(queryClient);
+      const previousProfileSummary = queryClient.getQueryData<CurrentProfileResponse>(profileSummaryQueryKey);
+
+      const didContainPost = previousFeeds.some(([, data]) =>
+        data?.pages.some((page) => page.items.some((item) => item.id === postId))
+      );
+
+      updateFeedQueries(queryClient, (current) => ({
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          items: page.items.filter((item) => item.id !== postId)
+        }))
+      }));
+
+      if (didContainPost) {
+        queryClient.setQueryData<CurrentProfileResponse>(profileSummaryQueryKey, (current) => {
+          if (!current) {
+            return current;
+          }
+
+          return {
+            profile: {
+              ...current.profile,
+              postsCount: Math.max(0, current.profile.postsCount - 1)
+            }
+          };
+        });
+      }
+
+      return {
+        previousFeeds,
+        previousProfileSummary
+      };
+    },
+    onError: (_error, _postId, context) => {
+      if (context?.previousFeeds) {
+        restorePreviousFeedQueries(queryClient, context.previousFeeds);
+      }
+
+      if (context?.previousProfileSummary) {
+        queryClient.setQueryData(profileSummaryQueryKey, context.previousProfileSummary);
+      }
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: postsQueryKey });
+      await queryClient.invalidateQueries({ queryKey: profileSummaryQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ["public-profile"] });
+      onSuccess?.();
+    }
+  });
+}
+
 export function useCreateCommentMutation(postId: string) {
   const queryClient = useQueryClient();
 
@@ -280,26 +481,80 @@ export function useCreateCommentMutation(postId: string) {
         };
       });
 
-      queryClient.setQueryData<InfiniteData<FeedResponse>>(postsQueryKey, (current) => {
+      updateFeedQueries(queryClient, (current) => ({
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          items: page.items.map((item) =>
+            item.id === postId
+              ? {
+                  ...item,
+                  commentCount: item.commentCount + 1
+                }
+              : item
+          )
+        }))
+      }));
+
+      await queryClient.invalidateQueries({ queryKey: commentsQueryKey(postId) });
+    }
+  });
+}
+
+export function useUpdateCommentMutation(postId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ commentId, input }: { commentId: string; input: CreateCommentInput }) =>
+      updateComment(commentId, input),
+    onSuccess: async (result) => {
+      queryClient.setQueryData<PostCommentsResponse | undefined>(commentsQueryKey(postId), (current) => {
         if (!current) {
           return current;
         }
 
         return {
-          ...current,
-          pages: current.pages.map((page) => ({
-            ...page,
-            items: page.items.map((item) =>
-              item.id === postId
-                ? {
-                    ...item,
-                    commentCount: item.commentCount + 1
-                  }
-                : item
-            )
-          }))
+          comments: current.comments.map((comment) =>
+            comment.id === result.comment.id ? result.comment : comment
+          )
         };
       });
+
+      await queryClient.invalidateQueries({ queryKey: commentsQueryKey(postId) });
+    }
+  });
+}
+
+export function useDeleteCommentMutation(postId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (commentId: string) => deleteComment(commentId),
+    onSuccess: async (result) => {
+      queryClient.setQueryData<PostCommentsResponse | undefined>(commentsQueryKey(postId), (current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          comments: current.comments.filter((comment) => comment.id !== result.commentId)
+        };
+      });
+
+      updateFeedQueries(queryClient, (current) => ({
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          items: page.items.map((item) =>
+            item.id === result.postId
+              ? {
+                  ...item,
+                  commentCount: Math.max(0, item.commentCount - 1)
+                }
+              : item
+          )
+        }))
+      }));
 
       await queryClient.invalidateQueries({ queryKey: commentsQueryKey(postId) });
     }
@@ -332,6 +587,7 @@ export function useToggleFollowMutation() {
 
       await queryClient.invalidateQueries({ queryKey: profileSummaryQueryKey });
       await queryClient.invalidateQueries({ queryKey: ["public-profile"] });
+      await queryClient.invalidateQueries({ queryKey: postsQueryKey });
     }
   });
 }
@@ -383,6 +639,29 @@ export function useSendDirectMessageMutation(onSuccess?: (conversationId: string
       await queryClient.invalidateQueries({ queryKey: conversationsQueryKey });
       await queryClient.invalidateQueries({ queryKey: conversationMessagesQueryKey(result.conversation.id) });
       onSuccess?.(result.conversation.id);
+    }
+  });
+}
+
+export function useMarkNotificationsReadMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: markNotificationsRead,
+    onSuccess: (result: MarkNotificationsReadResponse) => {
+      queryClient.setQueryData<NotificationsResponse | undefined>(notificationsQueryKey, (current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          unreadCount: result.unreadCount,
+          notifications: current.notifications.map((notification) => ({
+            ...notification,
+            readAt: notification.readAt ?? new Date().toISOString()
+          }))
+        };
+      });
     }
   });
 }

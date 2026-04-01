@@ -1,16 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ConversationSummary,
   CreatePostInput,
   FeedPost,
   LoginInput,
+  Notification as AppNotification,
   PublicProfile,
   RegisterInput,
   SafeUser,
-  SuggestedUser
+  SuggestedUser,
 } from "@redpulse/validation";
 import {
   Bell,
+  Bookmark,
   Compass,
   Hash,
   Home,
@@ -19,42 +21,59 @@ import {
   LogOut,
   MapPin,
   Menu,
+  MessageSquareText,
   Moon,
   MoonStar,
   PlusSquare,
   Search,
   Send,
+  SendHorizontal,
   SmilePlus,
   Sun,
   SunMedium,
   TrendingUp,
-  UserRound
+  UserRound,
 } from "lucide-react";
 import { Button, Card, CardContent, CardTitle, Logo, cn } from "@redpulse/ui";
 import { ApiError } from "./lib/api";
 import { GoogleSignInButton } from "./features/auth/google-sign-in-button";
 import { FeedList } from "./features/feed/feed-list";
+import { PostCard } from "./features/feed/post-card";
 import {
   useConversationMessagesQuery,
   useConversationsQuery,
   useCreatePostMutation,
   useCurrentUserQuery,
+  useDeletePostMutation,
   useGoogleConfigQuery,
   useGoogleLoginMutation,
   useLoginMutation,
+  useMarkNotificationsReadMutation,
+  useNotificationsQuery,
   useLogoutMutation,
   usePostsQuery,
   useProfileSummaryQuery,
   usePublicProfileQuery,
   useRegisterMutation,
+  useSavedPostsQuery,
   useSendDirectMessageMutation,
   useSuggestedUsersQuery,
-  useToggleFollowMutation
-  ,
-  useUpdateProfileMutation
+  useToggleFollowMutation,
+  useToggleLikeMutation,
+  useToggleSaveMutation,
+  useUpdateProfileMutation,
 } from "./features/feed/hooks";
 
-type AppView = "home" | "search" | "explore" | "messages" | "notifications" | "create" | "profile" | "more";
+type AppView =
+  | "home"
+  | "search"
+  | "explore"
+  | "messages"
+  | "notifications"
+  | "create"
+  | "profile"
+  | "saved"
+  | "more";
 type ThemeMode = "dark" | "light";
 
 type NetworkUser = {
@@ -64,6 +83,7 @@ type NetworkUser = {
   bio?: string | null;
   followersCount: number;
   postsCount: number;
+  mutualCount?: number;
   isFollowing: boolean;
 };
 
@@ -76,16 +96,16 @@ type MessageThread = {
 
 const initialPostState: CreatePostInput = {
   content: "",
-  location: ""
+  location: "",
 };
 const initialLoginState: LoginInput = {
   identifier: "",
-  password: ""
+  password: "",
 };
 const initialRegisterState: RegisterInput = {
   username: "",
   email: "",
-  password: ""
+  password: "",
 };
 const featuredLocations = [
   "Makassar, Indonesia",
@@ -93,7 +113,7 @@ const featuredLocations = [
   "Bandung, Indonesia",
   "Bali, Indonesia",
   "Surabaya, Indonesia",
-  "Yogyakarta, Indonesia"
+  "Yogyakarta, Indonesia",
 ];
 
 function getGoogleAuthErrorMessage(value: string) {
@@ -119,7 +139,11 @@ function getGoogleAuthErrorMessage(value: string) {
   }
 }
 
-function buildNetworkUsers(currentUserId: string, suggestions: SuggestedUser[], posts: FeedPost[]) {
+function buildNetworkUsers(
+  currentUserId: string,
+  suggestions: SuggestedUser[],
+  posts: FeedPost[],
+) {
   const map = new Map<string, NetworkUser>();
 
   for (const user of suggestions) {
@@ -134,7 +158,8 @@ function buildNetworkUsers(currentUserId: string, suggestions: SuggestedUser[], 
       bio: user.bio,
       followersCount: user.followersCount,
       postsCount: user.postsCount,
-      isFollowing: user.isFollowing
+      mutualCount: user.mutualCount,
+      isFollowing: user.isFollowing,
     });
   }
 
@@ -149,8 +174,10 @@ function buildNetworkUsers(currentUserId: string, suggestions: SuggestedUser[], 
       avatarUrl: post.author.avatarUrl,
       bio: null,
       followersCount: 0,
-      postsCount: posts.filter((item) => item.author.id === post.author.id).length,
-      isFollowing: false
+      postsCount: posts.filter((item) => item.author.id === post.author.id)
+        .length,
+      mutualCount: 0,
+      isFollowing: false,
     });
   }
 
@@ -168,7 +195,9 @@ export default function App() {
       return stored;
     }
 
-    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    return window.matchMedia("(prefers-color-scheme: light)").matches
+      ? "light"
+      : "dark";
   });
   const [postForm, setPostForm] = useState<CreatePostInput>(initialPostState);
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
@@ -176,32 +205,60 @@ export default function App() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [currentView, setCurrentView] = useState<AppView>("home");
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedProfileUserId, setSelectedProfileUserId] = useState<string | null>(null);
-  const [selectedMessageUserId, setSelectedMessageUserId] = useState<string | null>(null);
-  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [selectedProfileUserId, setSelectedProfileUserId] = useState<
+    string | null
+  >(null);
+  const [selectedMessageUserId, setSelectedMessageUserId] = useState<
+    string | null
+  >(null);
+  const [selectedConversationId, setSelectedConversationId] = useState<
+    string | null
+  >(null);
   const [messageDraft, setMessageDraft] = useState("");
   const [editingProfile, setEditingProfile] = useState(false);
   const [profileBioDraft, setProfileBioDraft] = useState("");
   const [profileAvatarDraft, setProfileAvatarDraft] = useState("");
   const [loginForm, setLoginForm] = useState<LoginInput>(initialLoginState);
-  const [registerForm, setRegisterForm] = useState<RegisterInput>(initialRegisterState);
+  const [registerForm, setRegisterForm] =
+    useState<RegisterInput>(initialRegisterState);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authCooldownSeconds, setAuthCooldownSeconds] = useState(0);
   const [postError, setPostError] = useState<string | null>(null);
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
 
   const currentUserQuery = useCurrentUserQuery();
   const currentUser = currentUserQuery.data?.user ?? null;
   const profileSummaryQuery = useProfileSummaryQuery(Boolean(currentUser));
   const profileSummary = profileSummaryQuery.data?.profile ?? null;
   const publicProfileQuery = usePublicProfileQuery(
-    currentUser && selectedProfileUserId && selectedProfileUserId !== currentUser.id ? selectedProfileUserId : null,
-    Boolean(currentUser && selectedProfileUserId && selectedProfileUserId !== currentUser.id)
+    currentUser &&
+      selectedProfileUserId &&
+      selectedProfileUserId !== currentUser.id
+      ? selectedProfileUserId
+      : null,
+    Boolean(
+      currentUser &&
+      selectedProfileUserId &&
+      selectedProfileUserId !== currentUser.id,
+    ),
   );
   const suggestedUsersQuery = useSuggestedUsersQuery(Boolean(currentUser));
   const suggestions = suggestedUsersQuery.data?.users ?? [];
-  const postsQuery = usePostsQuery();
-  const conversationsQuery = useConversationsQuery(Boolean(currentUser));
-  const googleConfigQuery = useGoogleConfigQuery();
-  const isOwnProfile = !selectedProfileUserId || selectedProfileUserId === currentUser?.id;
+  const followingPostsQuery = usePostsQuery("following", Boolean(currentUser));
+  const savedPostsQuery = useSavedPostsQuery(
+    Boolean(currentUser && currentView === "saved"),
+  );
+  const conversationsQuery = useConversationsQuery(
+    Boolean(currentUser && currentView === "messages"),
+    currentView === "messages",
+  );
+  const notificationsQuery = useNotificationsQuery(
+    Boolean(currentUser),
+    currentView === "notifications",
+  );
+  const googleConfigQuery = useGoogleConfigQuery(!currentUser);
+  const isOwnProfile =
+    !selectedProfileUserId || selectedProfileUserId === currentUser?.id;
   const activeProfile: PublicProfile | null =
     isOwnProfile && currentUser && profileSummary
       ? {
@@ -213,9 +270,9 @@ export default function App() {
           postsCount: profileSummary.postsCount,
           followersCount: profileSummary.followersCount,
           followingCount: profileSummary.followingCount,
-          isFollowing: false
+          isFollowing: false,
         }
-      : publicProfileQuery.data?.profile ?? null;
+      : (publicProfileQuery.data?.profile ?? null);
 
   const logoutMutation = useLogoutMutation(() => {
     setPostForm(initialPostState);
@@ -226,6 +283,7 @@ export default function App() {
     setSelectedMessageUserId(null);
     setMessageDraft("");
     setAuthError(null);
+    setAuthCooldownSeconds(0);
     setCurrentView("home");
   });
 
@@ -236,49 +294,65 @@ export default function App() {
     setPostError(null);
     setCurrentView("home");
   });
+  const deletePostMutation = useDeletePostMutation();
   const loginMutation = useLoginMutation(() => {
     setAuthError(null);
+    setAuthCooldownSeconds(0);
     setLoginForm(initialLoginState);
   });
   const registerMutation = useRegisterMutation(() => {
     setAuthError(null);
+    setAuthCooldownSeconds(0);
     setRegisterForm(initialRegisterState);
   });
   const googleLoginMutation = useGoogleLoginMutation(() => {
     setAuthError(null);
+    setAuthCooldownSeconds(0);
   });
   const updateProfileMutation = useUpdateProfileMutation((user: SafeUser) => {
     setEditingProfile(false);
     setProfileBioDraft(user.bio ?? "");
     setProfileAvatarDraft(user.avatarUrl ?? "");
   });
-  const sendDirectMessageMutation = useSendDirectMessageMutation((conversationId) => {
-    setSelectedConversationId(conversationId);
-    setMessageDraft("");
-  });
+  const sendDirectMessageMutation = useSendDirectMessageMutation(
+    (conversationId) => {
+      setSelectedConversationId(conversationId);
+      setMessageDraft("");
+    },
+  );
+  const markNotificationsReadMutation = useMarkNotificationsReadMutation();
+  const likeMutation = useToggleLikeMutation();
+  const saveMutation = useToggleSaveMutation();
 
   const followMutation = useToggleFollowMutation();
   const isLightTheme = themeMode === "light";
   const isAuthenticated = Boolean(currentUser);
-  const authLoading = currentUserQuery.isLoading || googleConfigQuery.isLoading;
+  const authLoading =
+    currentUserQuery.isLoading || (!currentUser && googleConfigQuery.isLoading);
   const restoringSession = currentUserQuery.isLoading;
   const googleClientId = googleConfigQuery.data?.clientId ?? "";
-  const allPosts = postsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const followingPosts =
+    followingPostsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const savedPosts = savedPostsQuery.data?.items ?? [];
   const conversations = conversationsQuery.data?.conversations ?? [];
-  const canSubmitPost = Boolean(postForm.content?.trim() || mediaFiles.length > 0);
+  const notifications = notificationsQuery.data?.notifications ?? [];
+  const unreadNotifications = notificationsQuery.data?.unreadCount ?? 0;
+  const canSubmitPost = Boolean(
+    postForm.content?.trim() || mediaFiles.length > 0,
+  );
   const mediaPreviews = useMemo(
     () =>
       mediaFiles.map((file) => ({
         name: file.name,
         type: file.type,
-        url: URL.createObjectURL(file)
+        url: URL.createObjectURL(file),
       })),
-    [mediaFiles]
+    [mediaFiles],
   );
   const trendingTopics = useMemo(() => {
     const topics = new Map<string, number>();
 
-    for (const post of allPosts) {
+    for (const post of followingPosts) {
       const matches = post.content?.match(/#[\p{L}\p{N}_]+/gu) ?? [];
 
       for (const match of matches) {
@@ -292,9 +366,9 @@ export default function App() {
       .slice(0, 4)
       .map(([label, count]) => ({
         label,
-        count
+        count,
       }));
-  }, [allPosts]);
+  }, [followingPosts]);
 
   const storyUsers = useMemo(() => {
     if (!currentUser) {
@@ -303,31 +377,35 @@ export default function App() {
 
     const seen = new Set<string>();
     const feedAuthors =
-      postsQuery.data?.pages
-        .flatMap((page) => page.items)
+      followingPosts
         .map((post) => ({
           id: post.author.id,
           username: post.author.username,
           avatarUrl: post.author.avatarUrl,
-          subtitle: "From your feed"
-        })) ?? [];
+          subtitle: "Mengikuti",
+        }));
 
     const suggestionAuthors = suggestions.map((user) => ({
       id: user.id,
-      username: user.username,
-      avatarUrl: user.avatarUrl,
-      subtitle: user.isFollowing ? "Following" : "Suggested"
-    }));
+        username: user.username,
+        avatarUrl: user.avatarUrl,
+        subtitle:
+          user.mutualCount && user.mutualCount > 0
+            ? `${user.mutualCount} koneksi serupa`
+            : user.isFollowing
+              ? "Mengikuti"
+              : "Direkomendasikan",
+      }));
 
     return [
       {
         id: currentUser.id,
         username: currentUser.username,
         avatarUrl: currentUser.avatarUrl,
-        subtitle: "Your story"
+        subtitle: "Story Anda",
       },
       ...feedAuthors,
-      ...suggestionAuthors
+      ...suggestionAuthors,
     ].filter((user) => {
       if (seen.has(user.id)) {
         return false;
@@ -336,15 +414,15 @@ export default function App() {
       seen.add(user.id);
       return true;
     });
-  }, [allPosts, currentUser, suggestions]);
+  }, [currentUser, followingPosts, suggestions]);
 
   const networkUsers = useMemo(() => {
     if (!currentUser) {
       return [];
     }
 
-    return buildNetworkUsers(currentUser.id, suggestions, allPosts);
-  }, [allPosts, currentUser, suggestions]);
+    return buildNetworkUsers(currentUser.id, suggestions, followingPosts);
+  }, [currentUser, followingPosts, suggestions]);
 
   const messageThreads = useMemo(() => {
     const map = new Map<string, MessageThread>();
@@ -358,11 +436,13 @@ export default function App() {
           bio: conversation.participant.bio,
           followersCount: 0,
           postsCount: 0,
-          isFollowing: suggestions.find((user) => user.id === conversation.participant.id)?.isFollowing ?? false
+          isFollowing:
+            suggestions.find((user) => user.id === conversation.participant.id)
+              ?.isFollowing ?? false,
         },
         conversationId: conversation.id,
         lastMessage: conversation.lastMessage?.content ?? null,
-        updatedAt: conversation.updatedAt
+        updatedAt: conversation.updatedAt,
       });
     }
 
@@ -375,25 +455,38 @@ export default function App() {
         user,
         conversationId: null,
         lastMessage: null,
-        updatedAt: null
+        updatedAt: null,
       });
     }
 
     return Array.from(map.values()).sort((left, right) => {
       const leftTime = left.updatedAt ? new Date(left.updatedAt).getTime() : 0;
-      const rightTime = right.updatedAt ? new Date(right.updatedAt).getTime() : 0;
+      const rightTime = right.updatedAt
+        ? new Date(right.updatedAt).getTime()
+        : 0;
 
-      return rightTime - leftTime || left.user.username.localeCompare(right.user.username);
+      return (
+        rightTime - leftTime ||
+        left.user.username.localeCompare(right.user.username)
+      );
     });
   }, [conversations, networkUsers, suggestions]);
 
   const selectedThread = useMemo(() => {
     if (selectedConversationId) {
-      return messageThreads.find((thread) => thread.conversationId === selectedConversationId) ?? null;
+      return (
+        messageThreads.find(
+          (thread) => thread.conversationId === selectedConversationId,
+        ) ?? null
+      );
     }
 
     if (selectedMessageUserId) {
-      return messageThreads.find((thread) => thread.user.id === selectedMessageUserId) ?? null;
+      return (
+        messageThreads.find(
+          (thread) => thread.user.id === selectedMessageUserId,
+        ) ?? null
+      );
     }
 
     return messageThreads[0] ?? null;
@@ -401,7 +494,7 @@ export default function App() {
 
   const conversationMessagesQuery = useConversationMessagesQuery(
     selectedThread?.conversationId ?? null,
-    Boolean(currentUser && selectedThread?.conversationId)
+    Boolean(currentUser && selectedThread?.conversationId),
   );
 
   const filteredUsers = useMemo(() => {
@@ -421,10 +514,12 @@ export default function App() {
   const selectedMessageUser = selectedThread?.user ?? null;
 
   const profilePosts = useMemo(
-    () => allPosts.filter((post) => post.author.id === currentUser?.id),
-    [allPosts, currentUser?.id]
+    () => followingPosts.filter((post) => post.author.id === currentUser?.id),
+    [followingPosts, currentUser?.id],
   );
-  const displayedProfilePosts = isOwnProfile ? profilePosts : publicProfileQuery.data?.posts ?? [];
+  const displayedProfilePosts = isOwnProfile
+    ? profilePosts
+    : (publicProfileQuery.data?.posts ?? []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -462,6 +557,18 @@ export default function App() {
   }, [messageThreads, selectedConversationId, selectedMessageUserId]);
 
   useEffect(() => {
+    if (authCooldownSeconds <= 0) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setAuthCooldownSeconds((current) => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => window.clearTimeout(timeout);
+  }, [authCooldownSeconds]);
+
+  useEffect(() => {
     return () => {
       for (const preview of mediaPreviews) {
         URL.revokeObjectURL(preview.url);
@@ -478,6 +585,43 @@ export default function App() {
     setProfileAvatarDraft(currentUser.avatarUrl ?? "");
   }, [currentUser?.avatarUrl, currentUser?.bio, currentUser?.id]);
 
+  useEffect(() => {
+    if (
+      !currentUser ||
+      currentView !== "notifications" ||
+      unreadNotifications === 0 ||
+      markNotificationsReadMutation.isPending
+    ) {
+      return;
+    }
+
+    markNotificationsReadMutation.mutate();
+  }, [
+    currentUser,
+    currentView,
+    unreadNotifications,
+    markNotificationsReadMutation,
+  ]);
+
+  useEffect(() => {
+    if (currentView !== "messages") {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      messageEndRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "end",
+      });
+    }, 60);
+
+    return () => window.clearTimeout(timeout);
+  }, [
+    conversationMessagesQuery.data?.messages.length,
+    currentView,
+    selectedThread?.conversationId,
+  ]);
+
   function handlePostError(error: unknown) {
     if (error instanceof ApiError) {
       setPostError(error.message);
@@ -489,6 +633,9 @@ export default function App() {
 
   function handleAuthError(error: unknown) {
     if (error instanceof ApiError) {
+      if (error.retryAfterSeconds) {
+        setAuthCooldownSeconds(error.retryAfterSeconds);
+      }
       setAuthError(error.message);
       return;
     }
@@ -498,6 +645,9 @@ export default function App() {
 
   function handleGoogleError(error: unknown) {
     if (error instanceof ApiError) {
+      if (error.retryAfterSeconds) {
+        setAuthCooldownSeconds(error.retryAfterSeconds);
+      }
       setAuthError(error.message);
       return;
     }
@@ -508,7 +658,7 @@ export default function App() {
   function appendToComposer(token: string) {
     setPostForm((current) => ({
       ...current,
-      content: `${current.content ?? ""}${token}`.slice(0, 280)
+      content: `${current.content ?? ""}${token}`.slice(0, 280),
     }));
   }
 
@@ -529,14 +679,29 @@ export default function App() {
     setCurrentView("messages");
   }
 
+  const authLocked = authCooldownSeconds > 0;
+
   const shellClass = isLightTheme
     ? "bg-[radial-gradient(circle_at_top,rgba(255,0,0,0.05),transparent_24%),linear-gradient(180deg,#fafafa_0%,#f3f4f6_100%)] text-slate-950"
     : "";
-  const surfaceClass = isLightTheme ? "bg-white border-black/8 shadow-[0_18px_48px_rgba(15,23,42,0.08)]" : "bg-[#090909]";
-  const softSurfaceClass = isLightTheme ? "border-black/8 bg-black/[0.03]" : "border-white/10 bg-white/[0.02]";
+  const surfaceClass = isLightTheme
+    ? "bg-white border-black/8 shadow-[0_18px_48px_rgba(15,23,42,0.08)]"
+    : "bg-[#090909]";
+  const softSurfaceClass = isLightTheme
+    ? "border-black/8 bg-black/[0.03]"
+    : "border-white/10 bg-white/[0.02]";
   const subtleTextClass = isLightTheme ? "text-slate-600" : "text-white/55";
   const faintTextClass = isLightTheme ? "text-slate-400" : "text-white/38";
-  const navChromeClass = isLightTheme ? "border-black/8 bg-white/95" : "border-white/8 bg-black/95";
+  const navChromeClass = isLightTheme
+    ? "border-black/8 bg-white/95"
+    : "border-white/8 bg-black/95";
+  const panelHeadingClass = isLightTheme ? "text-slate-900" : "text-white/88";
+  const utilityButtonClass = isLightTheme
+    ? "w-full rounded-2xl border border-black/8 bg-black/[0.03] px-4 py-3 text-left text-sm text-slate-700 transition hover:bg-black/[0.05]"
+    : "w-full rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left text-sm text-white/70 transition hover:bg-white/[0.04]";
+  const softPanelClass = isLightTheme
+    ? "rounded-[24px] border border-black/8 bg-black/[0.03] p-4 text-sm leading-7 text-slate-600"
+    : "rounded-[24px] border border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-white/62";
 
   function getCurrentViewLabel() {
     switch (currentView) {
@@ -552,6 +717,8 @@ export default function App() {
         return "Buat";
       case "profile":
         return "Profil";
+      case "saved":
+        return "Tersimpan";
       case "more":
         return "Lainnya";
       case "home":
@@ -563,7 +730,12 @@ export default function App() {
   function renderComposer() {
     return (
       <section className="pb-4 md:pb-5">
-        <div className={cn("rounded-[24px] border p-3.5 shadow-[0_18px_46px_rgba(0,0,0,0.2)] md:rounded-[30px] md:p-5", surfaceClass)}>
+        <div
+          className={cn(
+            "rounded-[24px] border p-3.5 shadow-[0_18px_46px_rgba(0,0,0,0.2)] md:rounded-[30px] md:p-5",
+            surfaceClass,
+          )}
+        >
           <form
             className="space-y-4"
             onSubmit={(event) => {
@@ -573,31 +745,56 @@ export default function App() {
                 {
                   content: postForm.content,
                   location: postForm.location,
-                  files: mediaFiles
+                  files: mediaFiles,
                 },
                 {
-                  onError: handlePostError
-                }
+                  onError: handlePostError,
+                },
               );
             }}
           >
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className={cn("text-xs font-semibold uppercase tracking-[0.22em]", faintTextClass)}>Composer</p>
-                <p className={cn("mt-1 text-xs md:text-sm", subtleTextClass)}>Bagikan update, foto, atau video ke feed Anda.</p>
+                <p
+                  className={cn(
+                    "text-xs font-semibold uppercase tracking-[0.22em]",
+                    faintTextClass,
+                  )}
+                >
+                  Composer
+                </p>
+                <p className={cn("mt-1 text-xs md:text-sm", subtleTextClass)}>
+                  Bagikan update, foto, atau video ke feed Anda.
+                </p>
               </div>
-              <div className={cn("text-xs uppercase tracking-[0.18em]", faintTextClass)}>
-                {mediaFiles.length > 0 ? `${mediaFiles.length}/4 media` : "Caption atau media"}
+              <div
+                className={cn(
+                  "text-xs uppercase tracking-[0.18em]",
+                  faintTextClass,
+                )}
+              >
+                {mediaFiles.length > 0
+                  ? `${mediaFiles.length}/4 media`
+                  : "Caption atau media"}
               </div>
             </div>
 
             <div className="flex items-start gap-3">
-              <Avatar username={currentUser!.username} avatarUrl={currentUser!.avatarUrl} size="md" />
+              <Avatar
+                username={currentUser!.username}
+                avatarUrl={currentUser!.avatarUrl}
+                size="md"
+              />
               <div className="min-w-0 flex-1">
                 <textarea
                   className="min-h-24 w-full rounded-[18px] border border-border bg-background/70 px-3.5 py-3.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground/70 focus:border-ring/40 focus:bg-background md:min-h-28 md:rounded-[22px] md:px-4 md:py-4"
                   maxLength={280}
-                  onChange={(event) => setPostForm((current) => ({ ...current, content: event.target.value }))}
+                  onChange={(event) =>
+                    setPostForm((current) => ({
+                      ...current,
+                      content: event.target.value,
+                    }))
+                  }
                   placeholder="Apa yang sedang Anda pikirkan hari ini?"
                   value={postForm.content ?? ""}
                 />
@@ -606,11 +803,20 @@ export default function App() {
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className={cn("text-xs md:text-sm", subtleTextClass)}>
-                Posting sebagai <span className="font-semibold text-foreground">@{currentUser!.username}</span>
+                Posting sebagai{" "}
+                <span className="font-semibold text-foreground">
+                  @{currentUser!.username}
+                </span>
               </div>
               <div className="flex items-center gap-3">
-                <span className={cn("text-xs md:text-sm", subtleTextClass)}>{postForm.content?.length ?? 0}/280</span>
-                <Button type="submit" disabled={createPostMutation.isPending || !canSubmitPost} className="rounded-full px-5">
+                <span className={cn("text-xs md:text-sm", subtleTextClass)}>
+                  {postForm.content?.length ?? 0}/280
+                </span>
+                <Button
+                  type="submit"
+                  disabled={createPostMutation.isPending || !canSubmitPost}
+                  className="rounded-full px-5"
+                >
                   {createPostMutation.isPending ? "Memposting..." : "Posting"}
                 </Button>
               </div>
@@ -627,7 +833,9 @@ export default function App() {
                   className="hidden"
                   multiple
                   onChange={(event) => {
-                    const selectedFiles = Array.from(event.target.files ?? []).slice(0, 4);
+                    const selectedFiles = Array.from(
+                      event.target.files ?? [],
+                    ).slice(0, 4);
                     setMediaFiles(selectedFiles);
                   }}
                   type="file"
@@ -647,7 +855,9 @@ export default function App() {
                 type="button"
               >
                 <MapPin className="h-4 w-4" />
-                {postForm.location?.trim() ? postForm.location : "Tambah lokasi"}
+                {postForm.location?.trim()
+                  ? postForm.location
+                  : "Tambah lokasi"}
               </button>
               {mediaFiles.length > 0 ? (
                 <button
@@ -669,16 +879,34 @@ export default function App() {
                   >
                     <div className="aspect-[4/3] bg-background">
                       {preview.type.startsWith("video/") ? (
-                        <video className="h-full w-full object-cover" controls muted playsInline src={preview.url} />
+                        <video
+                          className="h-full w-full object-cover"
+                          controls
+                          muted
+                          playsInline
+                          src={preview.url}
+                        />
                       ) : (
-                        <img alt={preview.name} className="h-full w-full object-cover" src={preview.url} />
+                        <img
+                          alt={preview.name}
+                          className="h-full w-full object-cover"
+                          src={preview.url}
+                        />
                       )}
                     </div>
                     <div className="flex items-center justify-between gap-3 px-4 py-3">
-                      <p className="truncate text-sm text-foreground/62">{preview.name}</p>
+                      <p className="truncate text-sm text-foreground/62">
+                        {preview.name}
+                      </p>
                       <button
                         className="text-xs font-semibold text-primary"
-                        onClick={() => setMediaFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}
+                        onClick={() =>
+                          setMediaFiles((current) =>
+                            current.filter(
+                              (_, fileIndex) => fileIndex !== index,
+                            ),
+                          )
+                        }
                         type="button"
                       >
                         Hapus
@@ -693,13 +921,20 @@ export default function App() {
               <div className="space-y-3 rounded-[18px] border border-border bg-card/60 p-3.5 md:rounded-[22px] md:p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold text-foreground">Lokasi post</p>
-                    <p className="mt-1 text-xs text-foreground/45">Tambahkan kota, venue, atau area supaya post terasa lebih hidup.</p>
+                    <p className="text-sm font-semibold text-foreground">
+                      Lokasi post
+                    </p>
+                    <p className="mt-1 text-xs text-foreground/45">
+                      Tambahkan kota, venue, atau area supaya post terasa lebih
+                      hidup.
+                    </p>
                   </div>
                   {postForm.location?.trim() ? (
                     <button
                       className="text-xs font-semibold uppercase tracking-[0.16em] text-foreground/40 transition hover:text-foreground"
-                      onClick={() => setPostForm((current) => ({ ...current, location: "" }))}
+                      onClick={() =>
+                        setPostForm((current) => ({ ...current, location: "" }))
+                      }
                       type="button"
                     >
                       Hapus
@@ -711,7 +946,12 @@ export default function App() {
                   className="w-full rounded-[18px] border border-border bg-background/70 px-4 py-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground/70 focus:border-primary/30 focus:bg-background"
                   list="composer-location-options"
                   maxLength={160}
-                  onChange={(event) => setPostForm((current) => ({ ...current, location: event.target.value }))}
+                  onChange={(event) =>
+                    setPostForm((current) => ({
+                      ...current,
+                      location: event.target.value,
+                    }))
+                  }
                   placeholder="Contoh: Makassar, Indonesia"
                   value={postForm.location ?? ""}
                 />
@@ -729,9 +969,11 @@ export default function App() {
                         "shrink-0 rounded-full border px-3 py-2 text-xs font-medium transition",
                         postForm.location === location
                           ? "border-primary/35 bg-primary/10 text-primary"
-                          : "border-border bg-background/55 text-foreground/65 hover:bg-card hover:text-foreground"
+                          : "border-border bg-background/55 text-foreground/65 hover:bg-card hover:text-foreground",
                       )}
-                      onClick={() => setPostForm((current) => ({ ...current, location }))}
+                      onClick={() =>
+                        setPostForm((current) => ({ ...current, location }))
+                      }
                       type="button"
                     >
                       {location}
@@ -767,24 +1009,33 @@ export default function App() {
     if (currentView === "search") {
       return (
         <div className="space-y-6">
-          <SectionHeader title="Cari akun" description="Temukan akun lain berdasarkan username atau bio." />
+          <SectionHeader
+            title="Cari akun"
+            description="Temukan akun lain berdasarkan username atau bio."
+          />
           <Card className={surfaceClass}>
             <CardContent className="space-y-4 p-5">
               <input
-                className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/28 focus:border-primary/45"
+                className="w-full rounded-2xl border border-border bg-card/70 px-4 py-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground/60 focus:border-primary/45 focus:bg-card"
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder="Cari username atau bio"
                 value={searchQuery}
               />
               <div className="space-y-4">
                 {filteredUsers.length === 0 ? (
-                  <EmptyState title="Tidak ada hasil" description="Belum ada akun yang cocok dengan pencarian Anda." />
+                  <EmptyState
+                    title="Tidak ada hasil"
+                    description="Belum ada akun yang cocok dengan pencarian Anda."
+                  />
                 ) : (
                   filteredUsers.map((user) => (
                     <SuggestedUserRow
                       key={user.id}
                       user={user}
-                      disabled={followMutation.isPending && followMutation.variables === user.id}
+                      disabled={
+                        followMutation.isPending &&
+                        followMutation.variables === user.id
+                      }
                       onFollow={() => followMutation.mutate(user.id)}
                       onOpenProfile={openProfile}
                     />
@@ -800,8 +1051,17 @@ export default function App() {
     if (currentView === "explore") {
       return (
         <div className="space-y-6">
-          <SectionHeader title="Jelajahi" description="Lihat post publik terbaru dan akun yang sedang aktif di RedPulse." />
-          <FeedList canLike={true} onCreateFirstPost={() => setCurrentView("create")} onOpenProfile={openProfile} />
+          <SectionHeader
+            title="Jelajahi"
+            description="Lihat post publik terbaru, topik yang ramai, dan akun yang mungkin relevan di luar lingkar mengikuti Anda."
+          />
+          <FeedList
+            scope="global"
+            canLike={true}
+            currentUserId={currentUser?.id}
+            onCreateFirstPost={() => setCurrentView("create")}
+            onOpenProfile={openProfile}
+          />
         </div>
       );
     }
@@ -809,10 +1069,22 @@ export default function App() {
     if (currentView === "messages") {
       return (
         <div className="space-y-6">
-          <SectionHeader title="Pesan" description="DM satu-satu sekarang aktif. Pilih user lalu kirim pesan langsung dari sini." />
+          <SectionHeader
+            title="Pesan"
+            description="Percakapan kini terasa lebih seperti real chat. Pilih kontak, lihat bubble pesan yang lebih natural, dan balas langsung dari composer bawah."
+          />
           <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
-            <Card className={cn(surfaceClass, "p-0")}>
-              <CardContent className="space-y-2 p-3">
+            <Card className={cn(surfaceClass, "overflow-hidden p-0")}>
+              <CardContent className="space-y-3 p-3">
+                <div className="rounded-[22px] border border-border bg-background/55 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-foreground/38">
+                    Inbox
+                  </p>
+                  <p className="mt-2 text-sm text-foreground/60">
+                    Pilih orang untuk lanjut ngobrol atau mulai DM baru dari
+                    sini.
+                  </p>
+                </div>
                 {messageThreads.length === 0 ? (
                   <EmptyState
                     title="Belum ada percakapan"
@@ -820,125 +1092,248 @@ export default function App() {
                   />
                 ) : (
                   messageThreads.map((thread) => (
-                    <div
+                    <button
                       key={thread.user.id}
-                      className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition ${
+                      className={`flex w-full items-center gap-3 rounded-[22px] border px-3 py-3 text-left transition ${
                         selectedMessageUser?.id === thread.user.id
-                          ? "bg-white/[0.06] text-white"
-                          : "text-white/70 hover:bg-white/[0.03] hover:text-white"
+                          ? "border-primary/25 bg-primary/8 text-foreground shadow-[0_10px_24px_rgba(255,0,0,0.06)]"
+                          : "border-border text-foreground/72 hover:bg-foreground/[0.03] hover:text-foreground"
                       }`}
+                      onClick={() =>
+                        openMessages(thread.user.id, thread.conversationId)
+                      }
+                      type="button"
                     >
-                      <button className="shrink-0" onClick={() => openProfile(thread.user.id)} type="button">
-                        <Avatar username={thread.user.username} avatarUrl={thread.user.avatarUrl} size="md" />
-                      </button>
-                      <div className="min-w-0 flex-1">
-                        <button
-                          className="block truncate text-left text-sm font-semibold text-white transition hover:text-primary"
-                          onClick={() => openProfile(thread.user.id)}
-                          type="button"
-                        >
-                          @{thread.user.username}
-                        </button>
-                        <p className="truncate text-xs text-white/42">{thread.lastMessage ?? thread.user.bio ?? "Mulai percakapan baru."}</p>
-                        <button
-                          className="mt-2 text-xs font-medium text-white/55 transition hover:text-white"
-                          onClick={() => openMessages(thread.user.id, thread.conversationId)}
-                          type="button"
-                        >
-                          {thread.conversationId ? "Buka percakapan" : "Kirim pesan"}
-                        </button>
+                      <div className="relative shrink-0">
+                        <Avatar
+                          username={thread.user.username}
+                          avatarUrl={thread.user.avatarUrl}
+                          size="md"
+                        />
+                        <span className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-card bg-emerald-500/80" />
                       </div>
-                    </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <button
+                            className="block truncate text-left text-sm font-semibold text-foreground transition hover:text-primary"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openProfile(thread.user.id);
+                            }}
+                            type="button"
+                          >
+                            @{thread.user.username}
+                          </button>
+                          <span className="shrink-0 text-[11px] uppercase tracking-[0.18em] text-foreground/35">
+                            {thread.updatedAt
+                              ? getRelativeActivityTime(thread.updatedAt)
+                              : "baru"}
+                          </span>
+                        </div>
+                        <p className="mt-1 truncate text-xs text-foreground/45">
+                          {thread.lastMessage ??
+                            thread.user.bio ??
+                            "Mulai percakapan baru."}
+                        </p>
+                        <p className="mt-2 text-[11px] uppercase tracking-[0.18em] text-foreground/28">
+                          {thread.conversationId
+                            ? "Percakapan aktif"
+                            : "DM baru"}
+                        </p>
+                      </div>
+                    </button>
                   ))
                 )}
               </CardContent>
             </Card>
 
-            <Card className={surfaceClass}>
-              <CardContent className="space-y-5 p-5">
+            <Card className={cn(surfaceClass, "overflow-hidden")}>
+              <CardContent className="space-y-0 p-0">
                 {selectedMessageUser ? (
                   <>
-                    <div className="flex items-center gap-3">
-                      <Avatar username={selectedMessageUser.username} avatarUrl={selectedMessageUser.avatarUrl} size="md" />
-                      <div>
-                        <p className="font-semibold text-white">@{selectedMessageUser.username}</p>
-                        <p className="text-sm text-white/45">{selectedMessageUser.bio ?? "Siap untuk terhubung."}</p>
+                    <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <Avatar
+                          username={selectedMessageUser.username}
+                          avatarUrl={selectedMessageUser.avatarUrl}
+                          size="md"
+                        />
+                        <div className="min-w-0">
+                          <button
+                            className="truncate text-left font-semibold text-foreground transition hover:text-primary"
+                            onClick={() => openProfile(selectedMessageUser.id)}
+                            type="button"
+                          >
+                            @{selectedMessageUser.username}
+                          </button>
+                          <p className="truncate text-sm text-foreground/45">
+                            {selectedMessageUser.bio ?? "Siap untuk terhubung."}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                    <div className="space-y-3 rounded-[24px] border border-white/10 bg-white/[0.02] p-4">
-                      {conversationMessagesQuery.isLoading && selectedThread?.conversationId ? (
-                        <div className="flex items-center gap-3 text-sm text-white/62">
-                          <Loader className="h-4 w-4 animate-spin text-primary" />
-                          Memuat percakapan...
-                        </div>
-                      ) : conversationMessagesQuery.data?.messages.length ? (
-                        <div className="space-y-3">
-                          {conversationMessagesQuery.data.messages.map((message) => {
-                            const mine = message.senderId === currentUser!.id;
-
-                            return (
-                              <div key={message.id} className={cn("flex", mine ? "justify-end" : "justify-start")}>
-                                <div
-                                  className={cn(
-                                    "max-w-[85%] rounded-[22px] px-4 py-3 text-sm leading-7",
-                                    mine ? "bg-primary text-black" : "bg-white/[0.05] text-white/78"
-                                  )}
-                                >
-                                  <p>{message.content}</p>
-                                  <p className={cn("mt-2 text-[11px]", mine ? "text-black/60" : "text-white/38")}>
-                                    {new Date(message.createdAt).toLocaleString("id-ID", {
-                                      hour: "2-digit",
-                                      minute: "2-digit",
-                                      day: "2-digit",
-                                      month: "short"
-                                    })}
-                                  </p>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="text-sm leading-7 text-white/62">
-                          Belum ada pesan dengan @{selectedMessageUser.username}. Kirim pesan pertama untuk memulai percakapan.
-                        </div>
-                      )}
-                    </div>
-                    <form
-                      className="space-y-3"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-
-                        if (!messageDraft.trim()) {
-                          return;
-                        }
-
-                        sendDirectMessageMutation.mutate({
-                          userId: selectedMessageUser.id,
-                          input: {
-                            content: messageDraft.trim()
-                          }
-                        });
-                      }}
-                    >
-                      <textarea
-                        className="min-h-24 w-full rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/32 focus:border-primary/45"
-                        onChange={(event) => setMessageDraft(event.target.value)}
-                        placeholder={`Kirim pesan ke @${selectedMessageUser.username}`}
-                        value={messageDraft}
-                      />
-                      <div className="flex gap-3">
-                        <Button type="submit" disabled={sendDirectMessageMutation.isPending || !messageDraft.trim()}>
-                          {sendDirectMessageMutation.isPending ? "Mengirim..." : "Kirim pesan"}
-                        </Button>
-                        <Button variant="outline" onClick={() => openProfile(selectedMessageUser.id)} type="button">
+                      <div className="hidden sm:block">
+                        <Button
+                          className="rounded-full px-4"
+                          onClick={() => openProfile(selectedMessageUser.id)}
+                          size="sm"
+                          variant="outline"
+                        >
                           Buka profil
                         </Button>
                       </div>
-                    </form>
+                    </div>
+                    <div className="flex h-[540px] flex-col">
+                      <div className="flex-1 space-y-3 overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(255,0,0,0.04),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent)] px-4 py-4">
+                        {conversationMessagesQuery.isLoading &&
+                        selectedThread?.conversationId ? (
+                          <div className="flex items-center gap-3 rounded-[20px] border border-border bg-card/70 px-4 py-3 text-sm text-foreground/62">
+                            <Loader className="h-4 w-4 animate-spin text-primary" />
+                            Memuat percakapan...
+                          </div>
+                        ) : conversationMessagesQuery.data?.messages.length ? (
+                          <div className="space-y-3">
+                            {conversationMessagesQuery.data.messages.map(
+                              (message) => {
+                                const mine =
+                                  message.senderId === currentUser!.id;
+
+                                return (
+                                  <div
+                                    key={message.id}
+                                    className={cn(
+                                      "flex items-end gap-2",
+                                      mine ? "justify-end" : "justify-start",
+                                    )}
+                                  >
+                                    {!mine ? (
+                                      <Avatar
+                                        username={message.sender.username}
+                                        avatarUrl={message.sender.avatarUrl}
+                                        size="md"
+                                      />
+                                    ) : null}
+                                    <div
+                                      className={cn(
+                                        "max-w-[88%] rounded-[24px] px-4 py-3 text-sm leading-7 shadow-[0_10px_24px_rgba(15,23,42,0.06)]",
+                                        mine
+                                          ? "rounded-br-[10px] bg-primary text-black"
+                                          : "rounded-bl-[10px] border border-border bg-card text-foreground/82",
+                                      )}
+                                    >
+                                      <p className="whitespace-pre-wrap break-words">
+                                        {message.content}
+                                      </p>
+                                      <div
+                                        className={cn(
+                                          "mt-2 flex items-center justify-end gap-2 text-[11px]",
+                                          mine
+                                            ? "text-black/60"
+                                            : "text-foreground/38",
+                                        )}
+                                      >
+                                        <span>
+                                          {new Date(
+                                            message.createdAt,
+                                          ).toLocaleString("id-ID", {
+                                            hour: "2-digit",
+                                            minute: "2-digit",
+                                            day: "2-digit",
+                                            month: "short",
+                                          })}
+                                        </span>
+                                        {mine ? (
+                                          <span className="font-semibold">
+                                            Terkirim
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              },
+                            )}
+                            <div ref={messageEndRef} />
+                          </div>
+                        ) : (
+                          <div className="rounded-[22px] border border-border bg-card/70 px-4 py-5 text-sm leading-7 text-foreground/62">
+                            Belum ada pesan dengan @
+                            {selectedMessageUser.username}. Kirim pesan pertama
+                            untuk memulai percakapan yang lebih hidup.
+                          </div>
+                        )}
+                      </div>
+                      <form
+                        className="border-t border-border bg-card/90 p-4"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+
+                          if (!messageDraft.trim()) {
+                            return;
+                          }
+
+                          sendDirectMessageMutation.mutate({
+                            userId: selectedMessageUser.id,
+                            input: {
+                              content: messageDraft.trim(),
+                            },
+                          });
+                        }}
+                      >
+                        <div className="rounded-[24px] border border-border bg-background/65 p-3">
+                          <textarea
+                            className="min-h-20 w-full resize-none bg-transparent px-2 py-2 text-sm text-foreground outline-none transition placeholder:text-foreground/32"
+                            onChange={(event) =>
+                              setMessageDraft(event.target.value)
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" && !event.shiftKey) {
+                                event.preventDefault();
+
+                                if (
+                                  !messageDraft.trim() ||
+                                  sendDirectMessageMutation.isPending
+                                ) {
+                                  return;
+                                }
+
+                                sendDirectMessageMutation.mutate({
+                                  userId: selectedMessageUser.id,
+                                  input: {
+                                    content: messageDraft.trim(),
+                                  },
+                                });
+                              }
+                            }}
+                            placeholder={`Tulis pesan untuk @${selectedMessageUser.username}...`}
+                            value={messageDraft}
+                          />
+                          <div className="mt-3 flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2 text-xs text-foreground/38">
+                              <MessageSquareText className="h-4 w-4 text-primary" />{" "}
+                            </div>
+                            <Button
+                              className="rounded-full px-4"
+                              disabled={
+                                sendDirectMessageMutation.isPending ||
+                                !messageDraft.trim()
+                              }
+                              type="submit"
+                            >
+                              <SendHorizontal className="mr-2 h-4 w-4" />
+                              {sendDirectMessageMutation.isPending
+                                ? "Mengirim..."
+                                : "Kirim"}
+                            </Button>
+                          </div>
+                        </div>
+                      </form>
+                    </div>
                   </>
                 ) : (
-                  <EmptyState title="Belum ada user" description="Daftar pesan akan aktif setelah ada akun lain yang bisa Anda pilih." />
+                  <EmptyState
+                    title="Belum ada user"
+                    description="Daftar pesan akan aktif setelah ada akun lain yang bisa Anda pilih."
+                  />
                 )}
               </CardContent>
             </Card>
@@ -948,29 +1343,46 @@ export default function App() {
     }
 
     if (currentView === "notifications") {
-      const notices = [
-        profileSummary
-          ? `Akun Anda punya ${profileSummary.followersCount} followers dan ${profileSummary.followingCount} following.`
-          : null,
-        suggestions.length > 0 ? `Ada ${suggestions.length} akun yang bisa Anda ikuti sekarang.` : null,
-        allPosts.length > 0 ? `Feed publik saat ini memuat ${allPosts.length} post terbaru.` : null
-      ].filter(Boolean) as string[];
-
       return (
         <div className="space-y-6">
-          <SectionHeader title="Notifikasi" description="Ringkasan aktivitas akun dan update penting di aplikasi." />
+          <SectionHeader
+            title="Notifikasi"
+            description="Update follow, pesan, like, komentar, dan post baru dari jaringan Anda muncul di sini."
+          />
           <Card className={surfaceClass}>
             <CardContent className="space-y-4 p-5">
-              {notices.length === 0 ? (
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    Aktivitas terbaru
+                  </p>
+                  <p className="mt-1 text-xs text-foreground/45">
+                    {unreadNotifications > 0
+                      ? `${unreadNotifications} notifikasi belum dibaca.`
+                      : "Semua notifikasi sudah terbaca."}
+                  </p>
+                </div>
+                <NotificationBadgeButton
+                  count={unreadNotifications}
+                  onClick={() => void notificationsQuery.refetch()}
+                />
+              </div>
+
+              {notificationsQuery.isLoading ? (
+                <div className="rounded-2xl border border-border bg-card/70 px-4 py-4 text-sm text-foreground/62">
+                  Memuat notifikasi terbaru...
+                </div>
+              ) : notifications.length === 0 ? (
                 <EmptyState
                   title="Belum ada notifikasi"
-                  description="Saat akun mulai aktif dan jaringan Anda tumbuh, notifikasi akan muncul di sini."
+                  description="Saat ada yang follow, kirim pesan, memberi Pulse, komentar, atau post baru dari jaringan Anda, semuanya akan muncul di sini."
                 />
               ) : (
-                notices.map((notice) => (
-                  <div key={notice} className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-4 text-sm text-white/72">
-                    {notice}
-                  </div>
+                notifications.map((notification) => (
+                  <NotificationRow
+                    key={notification.id}
+                    notification={notification}
+                  />
                 ))
               )}
             </CardContent>
@@ -982,13 +1394,17 @@ export default function App() {
     if (currentView === "create") {
       return (
         <div className="space-y-6">
-          <SectionHeader title="Buat post" description="Tulis update baru dan kirim langsung ke feed publik Anda." />
+          <SectionHeader
+            title="Buat post"
+            description="Tulis update baru dan kirim langsung ke feed publik Anda."
+          />
           {renderComposer()}
           <Card className={surfaceClass}>
             <CardContent className="space-y-3 p-5">
-              <p className="text-sm font-semibold text-white">Tips cepat</p>
-              <p className="text-sm leading-7 text-white/60">
-                Tulis singkat, jelas, dan fokus. Setelah post terkirim, Anda akan langsung dibawa kembali ke beranda.
+              <p className="text-sm font-semibold text-foreground">Tips cepat</p>
+              <p className="text-sm leading-7 text-foreground/60">
+                Tulis singkat, jelas, dan fokus. Setelah post terkirim, Anda
+                akan langsung dibawa kembali ke beranda.
               </p>
             </CardContent>
           </Card>
@@ -996,15 +1412,64 @@ export default function App() {
       );
     }
 
+    if (currentView === "saved") {
+      return (
+        <div className="space-y-6">
+          <SectionHeader
+            title="Tersimpan"
+            description="Kumpulan post yang Anda simpan untuk dibuka lagi nanti. Cocok untuk referensi, inspirasi, atau sekadar post yang ingin Anda baca ulang."
+          />
+          {savedPostsQuery.isLoading ? (
+            <Card className={surfaceClass}>
+              <CardContent className="flex items-center gap-3 p-5 text-sm text-foreground/62">
+                <Loader className="h-4 w-4 animate-spin text-primary" />
+                Memuat post tersimpan...
+              </CardContent>
+            </Card>
+          ) : savedPosts.length === 0 ? (
+            <EmptyState
+              title="Belum ada post tersimpan"
+              description="Tekan ikon bookmark pada post yang Anda suka. Semua yang disimpan akan muncul rapi di halaman ini."
+            />
+          ) : (
+            <div className="space-y-5">
+              {savedPosts.map((post) => (
+                <PostCard
+                  key={post.id}
+                  canLike={true}
+                  currentUserId={currentUser?.id}
+                  deleting={deletePostMutation.isPending && deletePostMutation.variables === post.id}
+                  isOwner={post.author.id === currentUser?.id}
+                  liking={likeMutation.isPending && likeMutation.variables === post.id}
+                  onDelete={(postId) => deletePostMutation.mutate(postId)}
+                  onLike={(postId) => likeMutation.mutate(postId)}
+                  onOpenProfile={openProfile}
+                  onRequireAuth={() => setCurrentView("home")}
+                  onSave={(postId) => saveMutation.mutate(postId)}
+                  post={post}
+                  saving={saveMutation.isPending && saveMutation.variables === post.id}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     if (currentView === "profile") {
-      const profileTitle = isOwnProfile ? "Profil" : `@${activeProfile?.username ?? "profil"}`;
+      const profileTitle = isOwnProfile
+        ? "Profil"
+        : `@${activeProfile?.username ?? "profil"}`;
       const profileDescription = isOwnProfile
         ? "Ringkasan akun Anda dan post yang sudah dipublikasikan."
         : "Lihat profil publik user lain, lengkap dengan post yang sudah mereka bagikan.";
 
       return (
         <div className="space-y-6">
-          <SectionHeader title={profileTitle} description={profileDescription} />
+          <SectionHeader
+            title={profileTitle}
+            description={profileDescription}
+          />
           {!isOwnProfile && publicProfileQuery.isLoading ? (
             <Card className={surfaceClass}>
               <CardContent className="flex items-center gap-3 p-5 text-sm text-foreground/62">
@@ -1015,63 +1480,114 @@ export default function App() {
           ) : null}
           {!isOwnProfile && publicProfileQuery.isError ? (
             <Card className={surfaceClass}>
-              <CardContent className="p-5 text-sm text-red-400">Profil user ini belum bisa dimuat sekarang.</CardContent>
+              <CardContent className="p-5 text-sm text-red-400">
+                Profil user ini belum bisa dimuat sekarang.
+              </CardContent>
             </Card>
           ) : null}
           <Card className={surfaceClass}>
-            <CardContent className="space-y-5 p-5">
-              <div className="flex items-center gap-4">
+            <CardContent className="space-y-5 p-4 sm:p-5">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
                 <Avatar
-                  username={activeProfile?.username ?? (isOwnProfile ? currentUser!.username : "RP")}
-                  avatarUrl={activeProfile?.avatarUrl ?? (isOwnProfile ? currentUser!.avatarUrl : null)}
+                  username={
+                    activeProfile?.username ??
+                    (isOwnProfile ? currentUser!.username : "RP")
+                  }
+                  avatarUrl={
+                    activeProfile?.avatarUrl ??
+                    (isOwnProfile ? currentUser!.avatarUrl : null)
+                  }
                   size="lg"
                 />
-                <div className="min-w-0">
-                  <p className="text-xl font-semibold text-white">
-                    @{activeProfile?.username ?? (isOwnProfile ? currentUser!.username : "profil")}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <p className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
+                      @
+                      {activeProfile?.username ??
+                        (isOwnProfile ? currentUser!.username : "profil")}
+                    </p>
+                    <span className="inline-flex rounded-full border border-border bg-card/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-foreground/40">
+                      {isOwnProfile ? "Akun Anda" : "Profil publik"}
+                    </span>
+                  </div>
+                  <p className="mt-1 break-all text-sm text-foreground/50">
+                    {isOwnProfile
+                      ? currentUser!.email
+                      : "Lihat jaringan, aktivitas, dan post publik user ini."}
                   </p>
-                  <p className="text-sm text-white/50">
-                    {isOwnProfile ? currentUser!.email : "Profil publik RedPulse"}
+                  <p className="mt-3 text-sm leading-7 text-foreground/60">
+                    @
+                    {activeProfile?.username ??
+                      (isOwnProfile ? currentUser!.username : "profil")}
                   </p>
-                  <p className="mt-2 text-sm text-white/60">
+                  <p className="text-sm leading-7 text-foreground/60">
                     {activeProfile?.bio ?? "Belum ada bio untuk akun ini."}
                   </p>
                 </div>
               </div>
               {activeProfile ? (
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-3 gap-2 sm:gap-3">
                   <StatCard label="Posts" value={activeProfile.postsCount} />
-                  <StatCard label="Followers" value={activeProfile.followersCount} />
-                  <StatCard label="Following" value={activeProfile.followingCount} />
+                  <StatCard
+                    label="Followers"
+                    value={activeProfile.followersCount}
+                  />
+                  <StatCard
+                    label="Following"
+                    value={activeProfile.followingCount}
+                  />
                 </div>
               ) : null}
               {!isOwnProfile && activeProfile ? (
-                <div className="flex gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Button
-                    className="rounded-full px-5"
+                    className="justify-center rounded-full px-5"
                     variant={activeProfile.isFollowing ? "outline" : "default"}
-                    disabled={followMutation.isPending && followMutation.variables === activeProfile.id}
+                    disabled={
+                      followMutation.isPending &&
+                      followMutation.variables === activeProfile.id
+                    }
                     onClick={() => followMutation.mutate(activeProfile.id)}
                   >
                     {activeProfile.isFollowing ? "Batal mengikuti" : "Ikuti"}
                   </Button>
-                  <Button className="rounded-full px-5" variant="outline" onClick={() => openMessages(activeProfile.id)}>
+                  <Button
+                    className="justify-center rounded-full px-5"
+                    variant="outline"
+                    onClick={() => openMessages(activeProfile.id)}
+                  >
                     Kirim pesan
                   </Button>
                 </div>
               ) : null}
               {isOwnProfile ? (
                 <div className="space-y-4">
-                  <div className="flex gap-3">
-                    <Button className="rounded-full px-5" variant="outline" onClick={() => setEditingProfile((current) => !current)}>
+                  <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-3">
+                    <Button
+                      className="justify-center rounded-full px-4 sm:px-5"
+                      variant="outline"
+                      onClick={() => setEditingProfile((current) => !current)}
+                    >
                       {editingProfile ? "Tutup edit" : "Edit profil"}
                     </Button>
-                    <Button className="rounded-full px-5" variant="outline" onClick={() => setCurrentView("more")}>
+                    <Button
+                      className="justify-center rounded-full px-4 sm:px-5"
+                      variant="outline"
+                      onClick={() => setCurrentView("saved")}
+                    >
+                      <Bookmark className="mr-2 h-4 w-4" />
+                      Tersimpan
+                    </Button>
+                    <Button
+                      className="justify-center rounded-full px-4 sm:px-5"
+                      variant="outline"
+                      onClick={() => setCurrentView("more")}
+                    >
                       <Menu className="mr-2 h-4 w-4" />
                       Lainnya
                     </Button>
                     <Button
-                      className="rounded-full px-5"
+                      className="col-span-2 justify-center rounded-full px-4 sm:col-span-1 sm:px-5"
                       variant="ghost"
                       disabled={logoutMutation.isPending}
                       onClick={() => logoutMutation.mutate()}
@@ -1082,38 +1598,54 @@ export default function App() {
                   </div>
                   {editingProfile ? (
                     <form
-                      className="space-y-3 rounded-[22px] border border-border bg-card/60 p-4"
+                      className="space-y-3 rounded-[22px] border border-border bg-card/60 p-3.5 sm:p-4"
                       onSubmit={(event) => {
                         event.preventDefault();
                         updateProfileMutation.mutate({
                           bio: profileBioDraft,
-                          avatarUrl: profileAvatarDraft
+                          avatarUrl: profileAvatarDraft,
                         });
                       }}
                     >
                       <label className="block space-y-2">
-                        <span className="text-sm font-medium text-foreground/76">Bio</span>
+                        <span className="text-sm font-medium text-foreground/76">
+                          Bio
+                        </span>
                         <textarea
                           className="min-h-24 w-full rounded-2xl border border-border bg-card/70 px-4 py-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground/70 focus:border-primary/45 focus:bg-card"
                           maxLength={160}
-                          onChange={(event) => setProfileBioDraft(event.target.value)}
+                          onChange={(event) =>
+                            setProfileBioDraft(event.target.value)
+                          }
                           placeholder="Tulis bio singkat yang mewakili Anda"
                           value={profileBioDraft}
                         />
                       </label>
                       <label className="block space-y-2">
-                        <span className="text-sm font-medium text-foreground/76">Avatar URL</span>
+                        <span className="text-sm font-medium text-foreground/76">
+                          Avatar URL
+                        </span>
                         <input
                           className="w-full rounded-2xl border border-border bg-card/70 px-4 py-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground/70 focus:border-primary/45 focus:bg-card"
-                          onChange={(event) => setProfileAvatarDraft(event.target.value)}
+                          onChange={(event) =>
+                            setProfileAvatarDraft(event.target.value)
+                          }
                           placeholder="https://..."
                           value={profileAvatarDraft}
                         />
                       </label>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-xs uppercase tracking-[0.18em] text-foreground/35">{profileBioDraft.length}/160</span>
-                        <Button className="rounded-full px-5" disabled={updateProfileMutation.isPending} type="submit">
-                          {updateProfileMutation.isPending ? "Menyimpan..." : "Simpan profil"}
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <span className="text-xs uppercase tracking-[0.18em] text-foreground/35">
+                          {profileBioDraft.length}/160
+                        </span>
+                        <Button
+                          className="w-full rounded-full px-5 sm:w-auto"
+                          disabled={updateProfileMutation.isPending}
+                          type="submit"
+                        >
+                          {updateProfileMutation.isPending
+                            ? "Menyimpan..."
+                            : "Simpan profil"}
                         </Button>
                       </div>
                     </form>
@@ -1123,8 +1655,10 @@ export default function App() {
             </CardContent>
           </Card>
           <Card className={surfaceClass}>
-            <CardContent className="space-y-4 p-5">
-              <p className="text-sm font-semibold text-white">{isOwnProfile ? "Post Anda" : "Post publik"}</p>
+            <CardContent className="space-y-4 p-4 sm:p-5">
+              <p className="text-sm font-semibold text-foreground">
+                {isOwnProfile ? "Post Anda" : "Post publik"}
+              </p>
               {displayedProfilePosts.length === 0 ? (
                 <EmptyState
                   title="Belum ada post"
@@ -1135,7 +1669,18 @@ export default function App() {
                   }
                 />
               ) : (
-                displayedProfilePosts.map((post) => <ProfilePostRow key={post.id} post={post} />)
+                displayedProfilePosts.map((post) => (
+                  <ProfilePostRow
+                    key={post.id}
+                    post={post}
+                    deleting={
+                      deletePostMutation.isPending &&
+                      deletePostMutation.variables === post.id
+                    }
+                    isOwner={isOwnProfile}
+                    onDelete={() => deletePostMutation.mutate(post.id)}
+                  />
+                ))
               )}
             </CardContent>
           </Card>
@@ -1146,11 +1691,14 @@ export default function App() {
     if (currentView === "more") {
       return (
         <div className="space-y-6">
-          <SectionHeader title="Lainnya" description="Akses cepat ke pengaturan akun, keamanan, dan shortcut aplikasi." />
+          <SectionHeader
+            title="Lainnya"
+            description="Akses cepat ke pengaturan akun, keamanan, dan shortcut aplikasi."
+          />
           <div className="grid gap-5 md:grid-cols-2">
             <Card className={surfaceClass}>
               <CardContent className="space-y-4 p-5">
-                <p className="text-sm font-semibold text-white">Akun</p>
+                <p className="text-sm font-semibold text-foreground">Akun</p>
                 <ActionRow
                   title="Lihat profil"
                   description="Buka halaman profil dan ringkasan aktivitas Anda."
@@ -1166,36 +1714,59 @@ export default function App() {
                   description="Temukan user lain dari jaringan RedPulse."
                   onClick={() => setCurrentView("search")}
                 />
+                <ActionRow
+                  title="Post tersimpan"
+                  description="Buka kumpulan bookmark post yang ingin Anda lihat lagi."
+                  onClick={() => setCurrentView("saved")}
+                />
               </CardContent>
             </Card>
 
             <Card className={surfaceClass}>
               <CardContent className="space-y-4 p-5">
-                <p className="text-sm font-semibold text-white">Keamanan</p>
+                <p className="text-sm font-semibold text-foreground">Keamanan</p>
                 <InfoRow
                   title="Metode login"
-                  value={currentUser?.email ? "Google atau akun RedPulse" : "Belum tersedia"}
+                  value={
+                    currentUser?.email
+                      ? "Google atau akun RedPulse"
+                      : "Belum tersedia"
+                  }
                 />
                 <InfoRow
                   title="Email akun"
                   value={currentUser?.email ?? "Belum tersedia"}
                 />
-                <InfoRow
-                  title="Status sesi"
-                  value="Aktif di browser ini"
-                />
+                <InfoRow title="Status sesi" value="Aktif di browser ini" />
               </CardContent>
             </Card>
           </div>
 
           <Card className={surfaceClass}>
             <CardContent className="space-y-4 p-5">
-              <p className="text-sm font-semibold text-white">Shortcut</p>
+              <p className="text-sm font-semibold text-foreground">Shortcut</p>
               <div className="grid gap-3 sm:grid-cols-2">
-                <ShortcutCard label="Jelajahi feed" onClick={() => setCurrentView("explore")} />
-                <ShortcutCard label="Buka pesan" onClick={() => setCurrentView("messages")} />
-                <ShortcutCard label="Lihat notifikasi" onClick={() => setCurrentView("notifications")} />
-                <ShortcutCard label="Keluar dari akun" onClick={() => logoutMutation.mutate()} danger />
+                <ShortcutCard
+                  label="Jelajahi feed"
+                  onClick={() => setCurrentView("explore")}
+                />
+                <ShortcutCard
+                  label="Buka pesan"
+                  onClick={() => setCurrentView("messages")}
+                />
+                <ShortcutCard
+                  label="Lihat notifikasi"
+                  onClick={() => setCurrentView("notifications")}
+                />
+                <ShortcutCard
+                  label="Post tersimpan"
+                  onClick={() => setCurrentView("saved")}
+                />
+                <ShortcutCard
+                  label="Keluar dari akun"
+                  onClick={() => logoutMutation.mutate()}
+                  danger
+                />
               </div>
             </CardContent>
           </Card>
@@ -1205,39 +1776,84 @@ export default function App() {
 
     return (
       <div className="space-y-4 md:space-y-6">
-        <section className={cn("rounded-[22px] border p-4 shadow-[0_12px_36px_rgba(0,0,0,0.12)] lg:hidden", surfaceClass)}>
+        <section
+          className={cn(
+            "rounded-[22px] border p-4 shadow-[0_12px_36px_rgba(0,0,0,0.12)] lg:hidden",
+            surfaceClass,
+          )}
+        >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className={cn("text-xs font-semibold uppercase tracking-[0.22em]", faintTextClass)}>Beranda</p>
-              <h2 className="mt-2 text-xl font-black tracking-tight text-foreground">Halo, @{currentUser!.username}</h2>
+              <p
+                className={cn(
+                  "text-xs font-semibold uppercase tracking-[0.22em]",
+                  faintTextClass,
+                )}
+              >
+                Beranda
+              </p>
+              <h2 className="mt-2 text-xl font-black tracking-tight text-foreground">
+                Halo, @{currentUser!.username}
+              </h2>
               <p className={cn("mt-2 text-sm leading-6", subtleTextClass)}>
-                Lihat update terbaru, bagikan momen, dan bangun percakapan dari satu layar yang ringkas.
+                Lihat update terbaru, bagikan momen, dan bangun percakapan dari
+                satu layar yang ringkas.
               </p>
             </div>
-            <Avatar username={currentUser!.username} avatarUrl={currentUser!.avatarUrl} size="md" />
+            <Avatar
+              username={currentUser!.username}
+              avatarUrl={currentUser!.avatarUrl}
+              size="md"
+            />
           </div>
 
           <div className="mt-4 grid grid-cols-3 gap-2">
             <StatCard label="Posts" value={profileSummary?.postsCount ?? 0} />
-            <StatCard label="Followers" value={profileSummary?.followersCount ?? 0} />
-            <StatCard label="Following" value={profileSummary?.followingCount ?? 0} />
+            <StatCard
+              label="Followers"
+              value={profileSummary?.followersCount ?? 0}
+            />
+            <StatCard
+              label="Following"
+              value={profileSummary?.followingCount ?? 0}
+            />
           </div>
 
           <div className="mt-4 flex gap-2">
-            <Button className="flex-1 rounded-full" size="sm" onClick={() => setCurrentView("create")}>
+            <Button
+              className="flex-1 rounded-full"
+              size="sm"
+              onClick={() => setCurrentView("create")}
+            >
               Buat post
             </Button>
-            <Button className="flex-1 rounded-full" size="sm" variant="outline" onClick={() => setCurrentView("search")}>
+            <Button
+              className="flex-1 rounded-full"
+              size="sm"
+              variant="outline"
+              onClick={() => setCurrentView("search")}
+            >
               Cari akun
             </Button>
           </div>
 
           <div className="mt-3 flex gap-2 lg:hidden">
-            <Button className="flex-1 rounded-full" size="sm" variant="ghost" onClick={() => setCurrentView("more")}>
+            <Button
+              className="flex-1 rounded-full"
+              size="sm"
+              variant="ghost"
+              onClick={() => setCurrentView("more")}
+            >
               <Menu className="mr-2 h-4 w-4" />
               Lainnya
             </Button>
-            <Button className="flex-1 rounded-full" size="sm" variant="ghost" disabled={logoutMutation.isPending} onClick={() => logoutMutation.mutate()}>
+            <Button
+              className="flex-1 rounded-full"
+              size="sm"
+              variant="ghost"
+              disabled={logoutMutation.isPending}
+              onClick={() => logoutMutation.mutate()}
+            >
               <LogOut className="mr-2 h-4 w-4" />
               {logoutMutation.isPending ? "Keluar..." : "Logout"}
             </Button>
@@ -1248,7 +1864,9 @@ export default function App() {
           <div className="mb-3 flex items-center justify-between lg:hidden">
             <div>
               <p className="text-sm font-semibold text-foreground">Stories</p>
-              <p className="text-xs text-foreground/45">Akun yang aktif hari ini</p>
+              <p className="text-xs text-foreground/45">
+                Akun yang aktif hari ini
+              </p>
             </div>
             <button
               className="text-xs font-semibold uppercase tracking-[0.18em] text-foreground/40 transition hover:text-foreground"
@@ -1270,13 +1888,21 @@ export default function App() {
               ))
             ) : (
               <div className="rounded-[22px] bg-card/60 px-4 py-4 text-sm leading-7 text-foreground/55">
-                Stories akan mulai terisi saat akun lain ikut aktif. Untuk sekarang, Anda bisa memulai timeline dari post pertama.
+                Stories akan mulai terisi saat akun lain ikut aktif. Untuk
+                sekarang, Anda bisa memulai timeline dari post pertama.
               </div>
             )}
           </div>
         </section>
         {renderComposer()}
-        <FeedList canLike={true} onCreateFirstPost={() => setCurrentView("create")} onOpenProfile={openProfile} />
+        <FeedList
+          scope="following"
+          canLike={true}
+          currentUserId={currentUser?.id}
+          onCreateFirstPost={() => setCurrentView("create")}
+          onOpenExplore={() => setCurrentView("explore")}
+          onOpenProfile={openProfile}
+        />
       </div>
     );
   }
@@ -1289,11 +1915,21 @@ export default function App() {
     if (currentView === "messages") {
       return (
         <div className="space-y-4">
-          <CardTitle className="text-base text-white/88">Quick links</CardTitle>
-          <button className="w-full rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left text-sm text-white/70 transition hover:bg-white/[0.04]" onClick={() => setCurrentView("search")} type="button">
+          <CardTitle className={cn("text-base", panelHeadingClass)}>
+            Quick links
+          </CardTitle>
+          <button
+            className={utilityButtonClass}
+            onClick={() => setCurrentView("search")}
+            type="button"
+          >
             Cari user lain
           </button>
-          <button className="w-full rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left text-sm text-white/70 transition hover:bg-white/[0.04]" onClick={() => openProfile()} type="button">
+          <button
+            className={utilityButtonClass}
+            onClick={() => openProfile()}
+            type="button"
+          >
             Buka profil Anda
           </button>
         </div>
@@ -1303,11 +1939,35 @@ export default function App() {
     if (currentView === "profile") {
       return (
         <div className="space-y-4">
-          <CardTitle className="text-base text-white/88">Aksi cepat</CardTitle>
-          <button className="w-full rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left text-sm text-white/70 transition hover:bg-white/[0.04]" onClick={() => setCurrentView("create")} type="button">
+          <CardTitle className={cn("text-base", panelHeadingClass)}>
+            Aksi cepat
+          </CardTitle>
+          <button
+            className={utilityButtonClass}
+            onClick={() => setCurrentView("create")}
+            type="button"
+          >
             Tulis post baru
           </button>
-          <button className="w-full rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3 text-left text-sm text-white/70 transition hover:bg-white/[0.04]" onClick={() => setCurrentView("home")} type="button">
+          <button
+            className={utilityButtonClass}
+            onClick={() => setCurrentView("saved")}
+            type="button"
+          >
+            Buka post tersimpan
+          </button>
+          <button
+            className={utilityButtonClass}
+            onClick={() => setCurrentView("saved")}
+            type="button"
+          >
+            Lihat post tersimpan
+          </button>
+          <button
+            className={utilityButtonClass}
+            onClick={() => setCurrentView("home")}
+            type="button"
+          >
             Kembali ke beranda
           </button>
         </div>
@@ -1317,15 +1977,24 @@ export default function App() {
     if (currentView === "more") {
       return (
         <div className="space-y-4">
-          <CardTitle className="text-base text-white/88">Ringkasan akun</CardTitle>
-          <div className="rounded-[24px] border border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-white/62">
-            Gunakan halaman ini untuk lompat cepat ke profil, composer, pencarian user, dan kontrol sesi akun Anda.
+          <CardTitle className={cn("text-base", panelHeadingClass)}>
+            Ringkasan akun
+          </CardTitle>
+          <div className={softPanelClass}>
+            Gunakan halaman ini untuk lompat cepat ke profil, composer,
+            pencarian user, post tersimpan, dan kontrol sesi akun Anda.
           </div>
           {profileSummary ? (
             <div className="grid grid-cols-3 gap-3">
               <StatCard label="Posts" value={profileSummary.postsCount} />
-              <StatCard label="Followers" value={profileSummary.followersCount} />
-              <StatCard label="Following" value={profileSummary.followingCount} />
+              <StatCard
+                label="Followers"
+                value={profileSummary.followersCount}
+              />
+              <StatCard
+                label="Following"
+                value={profileSummary.followingCount}
+              />
             </div>
           ) : null}
         </div>
@@ -1335,20 +2004,31 @@ export default function App() {
     return (
       <>
         <div className="flex items-center gap-3">
-          <Avatar username={currentUser.username} avatarUrl={currentUser.avatarUrl} size="md" />
+          <Avatar
+            username={currentUser.username}
+            avatarUrl={currentUser.avatarUrl}
+            size="md"
+          />
           <div className="min-w-0 flex-1">
-            <p className="truncate font-semibold text-white">@{currentUser.username}</p>
-            <p className="truncate text-sm text-white/50">
-              {profileSummary?.bio ?? "Masuk dengan Google dan mulai bangun jaringan Anda."}
+            <p className="truncate font-semibold text-foreground">
+              @{currentUser.username}
+            </p>
+            <p className="truncate text-sm text-foreground/50">
+              {profileSummary?.bio ??
+                "Masuk dengan Google dan mulai bangun jaringan Anda."}
             </p>
           </div>
-          <button className="text-sm font-semibold text-primary" onClick={() => openProfile()} type="button">
+          <button
+            className="text-sm font-semibold text-primary"
+            onClick={() => openProfile()}
+            type="button"
+          >
             Akun
           </button>
         </div>
 
         {profileSummary ? (
-          <div className="grid grid-cols-3 gap-3 border-b border-white/8 pb-6">
+          <div className="grid grid-cols-3 gap-3 border-b border-border pb-6">
             <StatCard label="Posts" value={profileSummary.postsCount} />
             <StatCard label="Followers" value={profileSummary.followersCount} />
             <StatCard label="Following" value={profileSummary.followingCount} />
@@ -1357,26 +2037,45 @@ export default function App() {
 
         <section className="space-y-4">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base text-white/88">Disarankan untuk Anda</CardTitle>
-            <button className="text-sm font-semibold text-white/70" onClick={() => setCurrentView("search")} type="button">
+            <CardTitle className={cn("text-base", panelHeadingClass)}>
+              Teman dekat untuk Anda
+            </CardTitle>
+            <button
+              className="text-sm font-semibold text-foreground/70"
+              onClick={() => setCurrentView("search")}
+              type="button"
+            >
               Lihat semua
             </button>
           </div>
           <div className="space-y-4">
             {suggestedUsersQuery.isLoading ? (
-              <div className="text-sm text-white/50">Mencari akun untuk Anda...</div>
+              <div className="text-sm text-foreground/50">
+                Mencari akun untuk Anda...
+              </div>
             ) : suggestions.length === 0 ? (
-              <div className="space-y-3 rounded-[24px] border border-white/8 bg-white/[0.02] p-4">
-                <p className="text-sm font-semibold text-white">Jaringan Anda masih baru</p>
-                <p className="text-sm leading-6 text-white/52">
-                  Saat akun lain mendaftar, rekomendasi follow akan muncul di sini. Untuk sekarang, isi feed Anda dulu dan
-                  bangun profil yang enak dilihat.
+              <div className={cn("space-y-3", softPanelClass)}>
+                <p className="text-sm font-semibold text-foreground">
+                  Jaringan Anda masih baru
+                </p>
+                <p className="text-sm leading-6 text-foreground/52">
+                  Saat akun lain mendaftar, rekomendasi follow akan muncul di
+                  sini. Untuk sekarang, isi feed Anda dulu dan bangun profil
+                  yang enak dilihat.
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setCurrentView("create")}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentView("create")}
+                  >
                     Buat post
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => openProfile()}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openProfile()}
+                  >
                     Rapikan profil
                   </Button>
                 </div>
@@ -1386,7 +2085,10 @@ export default function App() {
                 <SuggestedUserRow
                   key={user.id}
                   user={user}
-                  disabled={followMutation.isPending && followMutation.variables === user.id}
+                  disabled={
+                    followMutation.isPending &&
+                    followMutation.variables === user.id
+                  }
                   onFollow={() => {
                     followMutation.mutate(user.id);
                   }}
@@ -1397,17 +2099,23 @@ export default function App() {
           </div>
         </section>
 
-        <section className="space-y-4 border-t border-white/8 pt-5">
+        <section className="space-y-4 border-t border-border pt-5">
           <div className="flex items-center gap-2">
             <TrendingUp className="h-4 w-4 text-primary" />
-            <CardTitle className="text-base text-white/88">Topik yang mulai ramai</CardTitle>
+            <CardTitle className={cn("text-base", panelHeadingClass)}>
+              Topik yang mulai ramai
+            </CardTitle>
           </div>
           {trendingTopics.length > 0 ? (
             <div className="space-y-3">
               {trendingTopics.map((topic) => (
                 <button
                   key={topic.label}
-                  className="flex w-full items-center justify-between rounded-[22px] border border-white/8 bg-white/[0.02] px-4 py-3 text-left transition hover:-translate-y-0.5 hover:bg-white/[0.04]"
+                  className={cn(
+                    "flex w-full items-center justify-between rounded-[22px] border px-4 py-3 text-left transition hover:-translate-y-0.5",
+                    softSurfaceClass,
+                    isLightTheme ? "hover:bg-black/[0.05]" : "hover:bg-white/[0.04]",
+                  )}
                   onClick={() => {
                     setSearchQuery(topic.label);
                     setCurrentView("search");
@@ -1415,22 +2123,31 @@ export default function App() {
                   type="button"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/[0.04] text-primary">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-card text-primary">
                       <Hash className="h-4 w-4" />
                     </div>
                     <div>
-                      <p className="text-sm font-semibold text-white">{topic.label}</p>
-                      <p className="text-xs uppercase tracking-[0.18em] text-white/32">{topic.count} post</p>
+                      <p className="text-sm font-semibold text-foreground">
+                        {topic.label}
+                      </p>
+                      <p className="text-xs uppercase tracking-[0.18em] text-foreground/32">
+                        {topic.count} post
+                      </p>
                     </div>
                   </div>
-                  <span className="text-xs font-semibold text-white/42">Lihat</span>
+                  <span className="text-xs font-semibold text-foreground/42">
+                    Lihat
+                  </span>
                 </button>
               ))}
             </div>
           ) : (
-            <div className="rounded-[24px] border border-white/8 bg-white/[0.02] p-4 text-sm leading-6 text-white/52">
-              Begitu user mulai memakai hashtag seperti <span className="font-semibold text-white">#update</span> atau{" "}
-              <span className="font-semibold text-white">#launch</span>, topik ramai akan muncul otomatis di sini.
+            <div className={softPanelClass}>
+              Begitu user mulai memakai hashtag seperti{" "}
+              <span className="font-semibold text-foreground">#update</span>{" "}
+              atau{" "}
+              <span className="font-semibold text-foreground">#launch</span>, topik
+              ramai akan muncul otomatis di sini.
             </div>
           )}
         </section>
@@ -1450,9 +2167,12 @@ export default function App() {
               <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
                 <Loader className="h-6 w-6 animate-spin" />
               </div>
-              <h1 className="mt-5 text-2xl font-black tracking-tight text-foreground">Memulihkan sesi Anda</h1>
+              <h1 className="mt-5 text-2xl font-black tracking-tight text-foreground">
+                Memulihkan sesi Anda
+              </h1>
               <p className="mt-3 text-sm leading-7 text-foreground/58">
-                RedPulse sedang memastikan akun Anda tetap masuk dengan aman. Halaman utama akan terbuka sebentar lagi.
+                RedPulse sedang memastikan akun Anda tetap masuk dengan aman.
+                Halaman utama akan terbuka sebentar lagi.
               </p>
             </div>
           </div>
@@ -1463,21 +2183,31 @@ export default function App() {
 
   if (!isAuthenticated || !currentUser) {
     return (
-      <main className={cn("mx-auto grid min-h-screen w-full max-w-[1400px] lg:grid-cols-[1.1fr_0.9fr]", shellClass)}>
+      <main
+        className={cn(
+          "mx-auto grid min-h-screen w-full max-w-[1400px] lg:grid-cols-[1.1fr_0.9fr]",
+          shellClass,
+        )}
+      >
         <section className="hidden border-r border-border lg:flex">
           <div className="flex w-full flex-col justify-between px-12 py-14 xl:px-16">
             <div className="space-y-10">
               <div className="flex items-center justify-between gap-4">
                 <Logo />
-                <ThemeToggle themeMode={themeMode} onToggle={() => setThemeMode(isLightTheme ? "dark" : "light")} />
+                <ThemeToggle
+                  themeMode={themeMode}
+                  onToggle={() => setThemeMode(isLightTheme ? "dark" : "light")}
+                />
               </div>
               <div className="max-w-2xl space-y-6">
                 <h1 className="text-5xl font-black leading-tight tracking-tight text-foreground xl:text-6xl">
-                  Social media yang lebih bersih, lebih fokus, dan enak dipakai setiap hari.
+                  Social media yang lebih bersih, lebih fokus, dan enak dipakai
+                  setiap hari.
                 </h1>
                 <p className="max-w-xl text-lg leading-8 text-foreground/65">
-                  Masuk dengan Google, ikuti akun lain, bagikan update, dan nikmati feed yang terasa modern tanpa layout
-                  yang terlalu ramai.
+                  Masuk dengan Google, ikuti akun lain, bagikan update, dan
+                  nikmati feed yang terasa modern tanpa layout yang terlalu
+                  ramai.
                 </p>
               </div>
             </div>
@@ -1494,16 +2224,24 @@ export default function App() {
           <div className="w-full max-w-md space-y-5">
             <div className="flex items-center justify-between lg:hidden">
               <Logo compact />
-              <ThemeToggle themeMode={themeMode} onToggle={() => setThemeMode(isLightTheme ? "dark" : "light")} />
+              <ThemeToggle
+                themeMode={themeMode}
+                onToggle={() => setThemeMode(isLightTheme ? "dark" : "light")}
+              />
             </div>
 
             <Card className="p-0">
               <CardContent className="space-y-8 p-7 sm:p-8">
                 <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Welcome to RedPulse</p>
-                  <h2 className="text-3xl font-black tracking-tight text-foreground">Masuk untuk lanjut</h2>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">
+                    Welcome to RedPulse
+                  </p>
+                  <h2 className="text-3xl font-black tracking-tight text-foreground">
+                    Masuk untuk lanjut
+                  </h2>
                   <p className="text-sm leading-7 text-foreground/62">
-                    Halaman utama dikunci sampai user login. Anda bisa lanjut dengan Google atau pakai akun RedPulse biasa.
+                    Halaman utama dikunci sampai user login. Anda bisa lanjut
+                    dengan Google atau pakai akun RedPulse biasa.
                   </p>
                 </div>
 
@@ -1516,25 +2254,28 @@ export default function App() {
                     <div className="flex justify-center rounded-[26px] border border-border bg-card/60 px-4 py-4">
                       <GoogleSignInButton
                         clientId={googleClientId}
-                        disabled={googleLoginMutation.isPending}
+                        disabled={googleLoginMutation.isPending || authLocked}
                         onCredential={(credential) => {
                           setAuthError(null);
                           googleLoginMutation.mutate(
                             { credential },
                             {
-                              onError: handleGoogleError
-                            }
+                              onError: handleGoogleError,
+                            },
                           );
                         }}
                       />
                     </div>
                     <p className="text-center text-xs leading-6 text-foreground/35">
-                      Jika popup Google ditutup atau gagal, coba lagi sekali dari tombol yang sama.
+                      {authLocked
+                        ? `Login dikunci sementara. Coba lagi dalam ${authCooldownSeconds} detik.`
+                        : "Jika popup Google ditutup atau gagal, coba lagi sekali dari tombol yang sama."}
                     </p>
                   </div>
                 ) : (
                   <div className="rounded-2xl border border-yellow-500/25 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-100">
-                    Google login belum siap di frontend. Pastikan `GOOGLE_CLIENT_ID` terbaca oleh server.
+                    Google login belum siap di frontend. Pastikan
+                    `GOOGLE_CLIENT_ID` terbaca oleh server.
                   </div>
                 )}
 
@@ -1547,7 +2288,9 @@ export default function App() {
                 <div className="grid grid-cols-2 rounded-full border border-border bg-card/80 p-1">
                   <button
                     className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                      authMode === "login" ? "bg-foreground text-background" : "text-foreground/65 hover:text-foreground"
+                      authMode === "login"
+                        ? "bg-foreground text-background"
+                        : "text-foreground/65 hover:text-foreground"
                     }`}
                     onClick={() => {
                       setAuthMode("login");
@@ -1559,7 +2302,9 @@ export default function App() {
                   </button>
                   <button
                     className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                      authMode === "register" ? "bg-foreground text-background" : "text-foreground/65 hover:text-foreground"
+                      authMode === "register"
+                        ? "bg-foreground text-background"
+                        : "text-foreground/65 hover:text-foreground"
                     }`}
                     onClick={() => {
                       setAuthMode("register");
@@ -1577,8 +2322,11 @@ export default function App() {
                     onSubmit={(event) => {
                       event.preventDefault();
                       setAuthError(null);
+                      if (authLocked) {
+                        return;
+                      }
                       loginMutation.mutate(loginForm, {
-                        onError: handleAuthError
+                        onError: handleAuthError,
                       });
                     }}
                   >
@@ -1586,22 +2334,40 @@ export default function App() {
                       <AuthInput
                         autoComplete="username"
                         label="Email atau username"
-                        onChange={(value) => setLoginForm((current) => ({ ...current, identifier: value }))}
+                        onChange={(value) =>
+                          setLoginForm((current) => ({
+                            ...current,
+                            identifier: value,
+                          }))
+                        }
                         placeholder="nama@contoh.com atau username"
                         value={loginForm.identifier}
                       />
                       <AuthInput
                         autoComplete="current-password"
                         label="Password"
-                        onChange={(value) => setLoginForm((current) => ({ ...current, password: value }))}
+                        onChange={(value) =>
+                          setLoginForm((current) => ({
+                            ...current,
+                            password: value,
+                          }))
+                        }
                         placeholder="Masukkan password"
                         type="password"
                         value={loginForm.password}
                       />
                     </div>
 
-                    <Button className="w-full" disabled={loginMutation.isPending} type="submit">
-                      {loginMutation.isPending ? "Masuk..." : "Login ke akun"}
+                    <Button
+                      className="w-full"
+                      disabled={loginMutation.isPending || authLocked}
+                      type="submit"
+                    >
+                      {loginMutation.isPending
+                        ? "Masuk..."
+                        : authLocked
+                          ? `Coba lagi ${authCooldownSeconds} dtk`
+                          : "Login ke akun"}
                     </Button>
                   </form>
                 ) : (
@@ -1610,8 +2376,11 @@ export default function App() {
                     onSubmit={(event) => {
                       event.preventDefault();
                       setAuthError(null);
+                      if (authLocked) {
+                        return;
+                      }
                       registerMutation.mutate(registerForm, {
-                        onError: handleAuthError
+                        onError: handleAuthError,
                       });
                     }}
                   >
@@ -1619,14 +2388,24 @@ export default function App() {
                       <AuthInput
                         autoComplete="username"
                         label="Username"
-                        onChange={(value) => setRegisterForm((current) => ({ ...current, username: value }))}
+                        onChange={(value) =>
+                          setRegisterForm((current) => ({
+                            ...current,
+                            username: value,
+                          }))
+                        }
                         placeholder="username"
                         value={registerForm.username}
                       />
                       <AuthInput
                         autoComplete="email"
                         label="Email"
-                        onChange={(value) => setRegisterForm((current) => ({ ...current, email: value }))}
+                        onChange={(value) =>
+                          setRegisterForm((current) => ({
+                            ...current,
+                            email: value,
+                          }))
+                        }
                         placeholder="nama@contoh.com"
                         type="email"
                         value={registerForm.email}
@@ -1634,29 +2413,50 @@ export default function App() {
                       <AuthInput
                         autoComplete="new-password"
                         label="Password"
-                        onChange={(value) => setRegisterForm((current) => ({ ...current, password: value }))}
+                        onChange={(value) =>
+                          setRegisterForm((current) => ({
+                            ...current,
+                            password: value,
+                          }))
+                        }
                         placeholder="Minimal 8 karakter"
                         type="password"
                         value={registerForm.password}
                       />
                     </div>
 
-                    <Button className="w-full" disabled={registerMutation.isPending} type="submit">
-                      {registerMutation.isPending ? "Membuat akun..." : "Buat akun baru"}
+                    <Button
+                      className="w-full"
+                      disabled={registerMutation.isPending || authLocked}
+                      type="submit"
+                    >
+                      {registerMutation.isPending
+                        ? "Membuat akun..."
+                        : authLocked
+                          ? `Coba lagi ${authCooldownSeconds} dtk`
+                          : "Buat akun baru"}
                     </Button>
                   </form>
                 )}
 
                 {authError ? (
                   <div className="rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                    {authError}
+                    <div className="space-y-1">
+                      <p>{authError}</p>
+                      {authLocked ? (
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-red-100/80">
+                          Coba lagi dalam {authCooldownSeconds} detik
+                        </p>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
               </CardContent>
             </Card>
 
             <p className="text-center text-xs leading-6 text-foreground/35">
-              UI dibuat fokus ke konten utama dan flow login, bukan penuh panel dekoratif.
+              UI dibuat fokus ke konten utama dan flow login, bukan penuh panel
+              dekoratif.
             </p>
           </div>
         </section>
@@ -1670,7 +2470,7 @@ export default function App() {
     <main
       className={cn(
         "mx-auto grid min-h-screen w-full max-w-[1480px] gap-4 px-3 py-3 pb-24 md:gap-6 md:px-4 md:py-4 lg:grid-cols-[220px_minmax(0,1fr)] lg:pb-4 xl:grid-cols-[220px_minmax(0,680px)_300px] xl:px-6",
-        shellClass
+        shellClass,
       )}
     >
       <aside className="hidden lg:block">
@@ -1678,37 +2478,101 @@ export default function App() {
           <div className="space-y-8">
             <div className="flex items-center justify-between gap-3 px-2">
               <Logo />
-              <ThemeToggle themeMode={themeMode} onToggle={() => setThemeMode(isLightTheme ? "dark" : "light")} />
+              <div className="flex items-center gap-2">
+                <NotificationIconButton
+                  count={unreadNotifications}
+                  onClick={() => setCurrentView("notifications")}
+                />
+                <ThemeToggle
+                  themeMode={themeMode}
+                  onToggle={() => setThemeMode(isLightTheme ? "dark" : "light")}
+                />
+              </div>
             </div>
 
             <nav className="space-y-2">
-              <SidebarItem icon={Home} label="Beranda" active={currentView === "home"} onClick={() => setCurrentView("home")} />
-              <SidebarItem icon={Search} label="Cari" active={currentView === "search"} onClick={() => setCurrentView("search")} />
-              <SidebarItem icon={Compass} label="Jelajahi" active={currentView === "explore"} onClick={() => setCurrentView("explore")} />
-              <SidebarItem icon={Send} label="Pesan" active={currentView === "messages"} onClick={() => setCurrentView("messages")} />
-              <SidebarItem icon={Bell} label="Notifikasi" active={currentView === "notifications"} onClick={() => setCurrentView("notifications")} />
-              <SidebarItem icon={PlusSquare} label="Buat" active={currentView === "create"} onClick={() => setCurrentView("create")} />
-              <SidebarItem icon={UserRound} label="Profil" active={currentView === "profile"} onClick={() => openProfile()} />
+              <SidebarItem
+                icon={Home}
+                label="Beranda"
+                active={currentView === "home"}
+                onClick={() => setCurrentView("home")}
+              />
+              <SidebarItem
+                icon={Search}
+                label="Cari"
+                active={currentView === "search"}
+                onClick={() => setCurrentView("search")}
+              />
+              <SidebarItem
+                icon={Compass}
+                label="Jelajahi"
+                active={currentView === "explore"}
+                onClick={() => setCurrentView("explore")}
+              />
+              <SidebarItem
+                icon={Send}
+                label="Pesan"
+                active={currentView === "messages"}
+                onClick={() => setCurrentView("messages")}
+              />
+              <SidebarItem
+                badgeCount={unreadNotifications}
+                icon={Bell}
+                label="Notifikasi"
+                active={currentView === "notifications"}
+                onClick={() => setCurrentView("notifications")}
+              />
+              <SidebarItem
+                icon={PlusSquare}
+                label="Buat"
+                active={currentView === "create"}
+                onClick={() => setCurrentView("create")}
+              />
+              <SidebarItem
+                icon={UserRound}
+                label="Profil"
+                active={currentView === "profile"}
+                onClick={() => openProfile()}
+              />
             </nav>
           </div>
 
           <div className="space-y-3">
-            <div className={cn("flex items-center gap-3 rounded-[24px] border px-4 py-4", softSurfaceClass)}>
-              <Avatar username={authenticatedUser.username} avatarUrl={authenticatedUser.avatarUrl} size="md" />
+            <div
+              className={cn(
+                "flex items-center gap-3 rounded-[24px] border px-4 py-4",
+                softSurfaceClass,
+              )}
+            >
+              <Avatar
+                username={authenticatedUser.username}
+                avatarUrl={authenticatedUser.avatarUrl}
+                size="md"
+              />
               <div className="min-w-0">
-                <p className="truncate font-semibold text-foreground">@{authenticatedUser.username}</p>
-                <p className="truncate text-sm text-foreground/50">{authenticatedUser.email}</p>
+                <p className="truncate font-semibold text-foreground">
+                  @{authenticatedUser.username}
+                </p>
+                <p className="truncate text-sm text-foreground/50">
+                  {authenticatedUser.email}
+                </p>
               </div>
             </div>
 
-            <Button className="w-full justify-start rounded-2xl" variant="outline" onClick={() => logoutMutation.mutate()}>
+            <Button
+              className="w-full justify-start rounded-2xl"
+              variant="outline"
+              onClick={() => logoutMutation.mutate()}
+            >
               <LogOut className="mr-2 h-4 w-4" />
               {logoutMutation.isPending ? "Signing out..." : "Keluar"}
             </Button>
 
             <button
               className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
-                currentView === "more" ? "bg-foreground/6 text-foreground" : "text-foreground/65 hover:bg-foreground/4"
+                currentView === "more"
+                  ? "bg-foreground/6 text-foreground"
+                  : "text-foreground/65 hover:bg-foreground/4"
               }`}
               onClick={() => setCurrentView("more")}
               type="button"
@@ -1729,24 +2593,65 @@ export default function App() {
           {renderRightAside()}
 
           <section className="space-y-3 border-t border-border pt-5 text-sm text-foreground/38">
-            <p className="leading-6">Tentang . Bantuan . API . Privasi . Ketentuan . Lokasi . Bahasa</p>
-            <p className="text-xs uppercase tracking-[0.18em] text-foreground/22">Copyright 2026 RedPulse</p>
+            <p className="leading-6">
+              Tentang . Bantuan . API . Privasi . Ketentuan . Lokasi . Bahasa
+            </p>
+            <p className="text-xs uppercase tracking-[0.18em] text-foreground/22">
+              Copyright 2026 RedPulse
+            </p>
           </section>
         </div>
       </aside>
 
-      <nav className={cn("fixed inset-x-0 bottom-0 z-30 border-t px-2 py-2 backdrop-blur lg:hidden", navChromeClass)}>
+      <nav
+        className={cn(
+          "fixed inset-x-0 bottom-0 z-30 border-t px-2 py-2 backdrop-blur lg:hidden",
+          navChromeClass,
+        )}
+      >
         <div className="mx-auto flex max-w-xl items-center justify-between gap-1">
-          <MobileNavItem icon={Home} label="Home" active={currentView === "home"} onClick={() => setCurrentView("home")} />
-          <MobileNavItem icon={Search} label="Cari" active={currentView === "search"} onClick={() => setCurrentView("search")} />
-          <MobileNavItem icon={PlusSquare} label="Buat" active={currentView === "create"} onClick={() => setCurrentView("create")} />
-          <MobileNavItem icon={Send} label="Pesan" active={currentView === "messages"} onClick={() => setCurrentView("messages")} />
-          <MobileNavItem icon={UserRound} label="Profil" active={currentView === "profile"} onClick={() => openProfile()} />
+          <MobileNavItem
+            icon={Home}
+            label="Home"
+            active={currentView === "home"}
+            onClick={() => setCurrentView("home")}
+          />
+          <MobileNavItem
+            icon={Search}
+            label="Cari"
+            active={currentView === "search"}
+            onClick={() => setCurrentView("search")}
+          />
+          <MobileNavItem
+            icon={PlusSquare}
+            label="Buat"
+            active={currentView === "create"}
+            onClick={() => setCurrentView("create")}
+          />
+          <MobileNavItem
+            icon={Send}
+            label="Pesan"
+            active={currentView === "messages"}
+            onClick={() => setCurrentView("messages")}
+          />
+          <MobileNavItem
+            icon={UserRound}
+            label="Profil"
+            active={currentView === "profile"}
+            onClick={() => openProfile()}
+          />
         </div>
       </nav>
 
-      <div className="fixed right-4 top-4 z-30 lg:hidden">
-        <ThemeToggle themeMode={themeMode} onToggle={() => setThemeMode(isLightTheme ? "dark" : "light")} />
+      <div className="fixed right-4 top-4 z-30 flex items-center gap-2 lg:hidden">
+        <NotificationIconButton
+          count={unreadNotifications}
+          onClick={() => setCurrentView("notifications")}
+        />
+        <ThemeToggle
+          themeMode={themeMode}
+          onToggle={() => setThemeMode(isLightTheme ? "dark" : "light")}
+        />
       </div>
     </main>
   );
@@ -1756,11 +2661,13 @@ function SidebarItem({
   icon: Icon,
   label,
   active = false,
-  onClick
+  badgeCount = 0,
+  onClick,
 }: {
   icon: typeof Home;
   label: string;
   active?: boolean;
+  badgeCount?: number;
   onClick: () => void;
 }) {
   return (
@@ -1768,10 +2675,21 @@ function SidebarItem({
       type="button"
       onClick={onClick}
       className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
-        active ? "bg-foreground/6 text-foreground" : "text-foreground/72 hover:bg-foreground/4 hover:text-foreground"
+        active
+          ? "bg-foreground/6 text-foreground"
+          : "text-foreground/72 hover:bg-foreground/4 hover:text-foreground"
       }`}
     >
-      <Icon className={`h-4 w-4 ${active ? "text-primary" : "text-foreground/62"}`} />
+      <div className="relative">
+        <Icon
+          className={`h-4 w-4 ${active ? "text-primary" : "text-foreground/62"}`}
+        />
+        {badgeCount > 0 ? (
+          <span className="absolute -right-2.5 -top-2 inline-flex min-w-5 items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-bold leading-none text-black">
+            {badgeCount > 9 ? "9+" : badgeCount}
+          </span>
+        ) : null}
+      </div>
       <span>{label}</span>
     </button>
   );
@@ -1781,7 +2699,7 @@ function MobileNavItem({
   icon: Icon,
   label,
   active,
-  onClick
+  onClick,
 }: {
   icon: typeof Home;
   label: string;
@@ -1796,22 +2714,40 @@ function MobileNavItem({
         active ? "bg-foreground/6 text-foreground" : "text-foreground/45"
       }`}
     >
-      <Icon className={`h-4 w-4 ${active ? "text-primary" : "text-foreground/55"}`} />
+      <Icon
+        className={`h-4 w-4 ${active ? "text-primary" : "text-foreground/55"}`}
+      />
       <span className="truncate">{label}</span>
     </button>
   );
 }
 
-function SectionHeader({ title, description }: { title: string; description: string }) {
+function SectionHeader({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
   return (
     <div className="space-y-3">
-      <h2 className="text-[28px] font-black tracking-tight text-foreground md:text-[32px]">{title}</h2>
-      <p className="max-w-2xl text-sm leading-7 text-foreground/55">{description}</p>
+      <h2 className="text-[28px] font-black tracking-tight text-foreground md:text-[32px]">
+        {title}
+      </h2>
+      <p className="max-w-2xl text-sm leading-7 text-foreground/55">
+        {description}
+      </p>
     </div>
   );
 }
 
-function EmptyState({ title, description }: { title: string; description: string }) {
+function EmptyState({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
   return (
     <div className="rounded-[24px] border border-border bg-card/70 p-5">
       <div className="animate-soft-float flex h-12 w-12 items-center justify-center rounded-2xl bg-card text-primary shadow-[0_14px_30px_rgba(255,0,0,0.08)]">
@@ -1823,10 +2759,113 @@ function EmptyState({ title, description }: { title: string; description: string
   );
 }
 
+function getRelativeActivityTime(value: string) {
+  const diffMs = Date.now() - new Date(value).getTime();
+  const diffMinutes = Math.max(1, Math.floor(diffMs / 60000));
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours}j`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}h`;
+}
+
+function NotificationIconButton({
+  count,
+  onClick,
+}: {
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-card/85 text-foreground shadow-[0_10px_24px_rgba(15,23,42,0.08)] transition hover:-translate-y-0.5 hover:bg-card"
+      onClick={onClick}
+      type="button"
+    >
+      <Bell className="h-4 w-4 text-primary" />
+      {count > 0 ? (
+        <span className="absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-black leading-none text-black">
+          {count > 9 ? "9+" : count}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function NotificationBadgeButton({
+  count,
+  onClick,
+}: {
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="inline-flex items-center gap-2 rounded-full border border-border bg-card/75 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-foreground/62 transition hover:bg-card"
+      onClick={onClick}
+      type="button"
+    >
+      <Bell className="h-3.5 w-3.5 text-primary" />
+      <span>{count > 0 ? `${count} baru` : "sinkron"}</span>
+    </button>
+  );
+}
+
+function NotificationRow({ notification }: { notification: AppNotification }) {
+  return (
+    <div
+      className={cn(
+        "rounded-[22px] border px-4 py-4 transition",
+        notification.readAt
+          ? "border-border bg-card/55"
+          : "border-primary/20 bg-primary/5 shadow-[0_14px_28px_rgba(255,0,0,0.06)]",
+      )}
+    >
+      <div className="flex items-start gap-3">
+        {notification.actor ? (
+          <Avatar
+            avatarUrl={notification.actor.avatarUrl}
+            size="md"
+            username={notification.actor.username}
+          />
+        ) : (
+          <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-card/80 text-primary">
+            <Bell className="h-4 w-4" />
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-semibold text-foreground">
+              {notification.message}
+            </p>
+            {!notification.readAt ? (
+              <span className="rounded-full bg-primary/12 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-primary">
+                Baru
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-foreground/40">
+            <span>{notification.type}</span>
+            <span>•</span>
+            <span>{getRelativeActivityTime(notification.createdAt)}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ActionRow({
   title,
   description,
-  onClick
+  onClick,
 }: {
   title: string;
   description: string;
@@ -1847,7 +2886,9 @@ function ActionRow({
 function InfoRow({ title, value }: { title: string; value: string }) {
   return (
     <div className="rounded-2xl border border-border bg-card/60 px-4 py-4">
-      <p className="text-xs uppercase tracking-[0.18em] text-foreground/38">{title}</p>
+      <p className="text-xs uppercase tracking-[0.18em] text-foreground/38">
+        {title}
+      </p>
       <p className="mt-2 text-sm font-medium text-foreground">{value}</p>
     </div>
   );
@@ -1856,7 +2897,7 @@ function InfoRow({ title, value }: { title: string; value: string }) {
 function ShortcutCard({
   label,
   onClick,
-  danger = false
+  danger = false,
 }: {
   label: string;
   onClick: () => void;
@@ -1877,19 +2918,85 @@ function ShortcutCard({
   );
 }
 
-function ProfilePostRow({ post }: { post: FeedPost }) {
+function ProfilePostRow({
+  post,
+  isOwner = false,
+  deleting = false,
+  onDelete,
+}: {
+  post: FeedPost;
+  isOwner?: boolean;
+  deleting?: boolean;
+  onDelete?: () => void;
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => {
+    if (!confirmDelete) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => setConfirmDelete(false), 4200);
+    return () => window.clearTimeout(timeout);
+  }, [confirmDelete]);
+
   return (
-    <div className="rounded-[24px] border border-border bg-card/70 p-4">
+    <div className="rounded-[24px] border border-border bg-card/70 p-3.5 sm:p-4">
+      <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-foreground/38">
+            Post
+          </p>
+          <p className="mt-1 text-xs text-foreground/45">
+            Tersimpan di profil Anda dan timeline publik.
+          </p>
+        </div>
+        {isOwner ? (
+          <Button
+            className={cn(
+              "w-full rounded-full border-red-500/25 bg-red-500/10 px-4 text-red-400 shadow-none hover:border-red-500/40 hover:bg-red-500/15 hover:text-red-300 sm:w-auto",
+              confirmDelete &&
+                "border-red-500/55 bg-red-500 text-white hover:bg-[#ff1a1a]",
+            )}
+            disabled={deleting}
+            onClick={() => {
+              if (!confirmDelete) {
+                setConfirmDelete(true);
+                return;
+              }
+
+              onDelete?.();
+            }}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            {deleting ? "Menghapus..." : confirmDelete ? "Ya, hapus" : "Hapus"}
+          </Button>
+        ) : null}
+      </div>
       {post.media.length > 0 ? (
         <div className="mb-3 overflow-hidden rounded-[18px] border border-border bg-background">
           {post.media[0]?.type === "video" ? (
-            <video className="max-h-56 w-full object-cover" controls playsInline preload="metadata" src={post.media[0].url} />
+            <video
+              className="max-h-56 w-full object-cover"
+              controls
+              playsInline
+              preload="metadata"
+              src={post.media[0].url}
+            />
           ) : (
-            <img alt={post.content ?? "Post media"} className="max-h-56 w-full object-cover" src={post.media[0]?.url} />
+            <img
+              alt={post.content ?? "Post media"}
+              className="max-h-56 w-full object-cover"
+              src={post.media[0]?.url}
+            />
           )}
         </div>
       ) : null}
-      <p className="text-sm leading-7 text-foreground/80">{post.content ?? "Post media tanpa caption."}</p>
+      <p className="text-sm leading-7 text-foreground/80">
+        {post.content ?? "Post media tanpa caption."}
+      </p>
       {post.location ? (
         <p className="mt-2 inline-flex items-center gap-2 text-xs font-medium text-foreground/45">
           <MapPin className="h-3.5 w-3.5 text-primary" />
@@ -1900,6 +3007,11 @@ function ProfilePostRow({ post }: { post: FeedPost }) {
         <span>{post.likeCount} pulse</span>
         <span>{post.type}</span>
       </div>
+      {confirmDelete ? (
+        <p className="mt-3 text-xs leading-6 text-red-300">
+          Klik sekali lagi untuk menghapus post ini dari feed dan profil.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1907,7 +3019,7 @@ function ProfilePostRow({ post }: { post: FeedPost }) {
 function Avatar({
   username,
   avatarUrl,
-  size
+  size,
 }: {
   username: string;
   avatarUrl?: string | null;
@@ -1926,7 +3038,9 @@ function Avatar({
   }
 
   return (
-    <div className={`flex ${classes} shrink-0 items-center justify-center rounded-full border border-primary/25 bg-primary/10 font-bold text-primary`}>
+    <div
+      className={`flex ${classes} shrink-0 items-center justify-center rounded-full border border-primary/25 bg-primary/10 font-bold text-primary`}
+    >
       {username.slice(0, 2).toUpperCase()}
     </div>
   );
@@ -1935,7 +3049,7 @@ function Avatar({
 function StoryBubble({
   username,
   avatarUrl,
-  subtitle
+  subtitle,
 }: {
   username: string;
   avatarUrl?: string | null;
@@ -1949,7 +3063,9 @@ function StoryBubble({
         </div>
       </div>
       <div>
-        <p className="truncate text-xs font-medium text-foreground">{username}</p>
+        <p className="truncate text-xs font-medium text-foreground">
+          {username}
+        </p>
         <p className="truncate text-[11px] text-foreground/38">{subtitle}</p>
       </div>
     </div>
@@ -1959,8 +3075,12 @@ function StoryBubble({
 function StatCard({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-[20px] border border-border bg-card/60 p-3 text-center shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
-      <div className="text-xl font-black tracking-tight text-foreground">{value}</div>
-      <div className="mt-1 text-[11px] uppercase tracking-[0.22em] text-foreground/36">{label}</div>
+      <div className="text-xl font-black tracking-tight text-foreground">
+        {value}
+      </div>
+      <div className="mt-1 text-[11px] uppercase tracking-[0.22em] text-foreground/36">
+        {label}
+      </div>
     </div>
   );
 }
@@ -1969,16 +3089,30 @@ function SuggestedUserRow({
   user,
   disabled,
   onFollow,
-  onOpenProfile
+  onOpenProfile,
 }: {
-  user: Pick<NetworkUser, "id" | "username" | "avatarUrl" | "bio" | "followersCount" | "postsCount" | "isFollowing">;
+  user: Pick<
+    NetworkUser,
+    | "id"
+    | "username"
+    | "avatarUrl"
+    | "bio"
+    | "followersCount"
+    | "mutualCount"
+    | "postsCount"
+    | "isFollowing"
+  >;
   disabled: boolean;
   onFollow: () => void;
   onOpenProfile?: (userId: string) => void;
 }) {
   return (
     <div className="flex items-center gap-3">
-      <button className="shrink-0" onClick={() => onOpenProfile?.(user.id)} type="button">
+      <button
+        className="shrink-0"
+        onClick={() => onOpenProfile?.(user.id)}
+        type="button"
+      >
         <Avatar username={user.username} avatarUrl={user.avatarUrl} size="md" />
       </button>
       <div className="min-w-0 flex-1">
@@ -1989,7 +3123,12 @@ function SuggestedUserRow({
         >
           @{user.username}
         </button>
-        <p className="truncate text-[12px] text-foreground/42">{user.bio ?? `${user.followersCount} followers . ${user.postsCount} posts`}</p>
+        <p className="truncate text-[12px] text-foreground/42">
+          {user.bio ??
+            (user.mutualCount && user.mutualCount > 0
+              ? `${user.mutualCount} koneksi serupa · ${user.followersCount} followers`
+              : `${user.followersCount} followers · ${user.postsCount} posts`)}
+        </p>
       </div>
       <button
         className="text-sm font-semibold text-primary transition hover:text-foreground disabled:cursor-not-allowed disabled:text-foreground/25"
@@ -2009,7 +3148,7 @@ function AuthInput({
   onChange,
   type = "text",
   placeholder,
-  autoComplete
+  autoComplete,
 }: {
   label: string;
   value: string;
@@ -2034,12 +3173,14 @@ function AuthInput({
 }
 
 function SparkleDot() {
-  return <div className="h-3.5 w-3.5 rounded-full bg-primary shadow-[0_0_20px_rgba(255,0,0,0.5)]" />;
+  return (
+    <div className="h-3.5 w-3.5 rounded-full bg-primary shadow-[0_0_20px_rgba(255,0,0,0.5)]" />
+  );
 }
 
 function ThemeToggle({
   themeMode,
-  onToggle
+  onToggle,
 }: {
   themeMode: ThemeMode;
   onToggle: () => void;
@@ -2050,7 +3191,11 @@ function ThemeToggle({
       onClick={onToggle}
       type="button"
     >
-      {themeMode === "dark" ? <SunMedium className="h-4 w-4 text-primary" /> : <MoonStar className="h-4 w-4 text-primary" />}
+      {themeMode === "dark" ? (
+        <SunMedium className="h-4 w-4 text-primary" />
+      ) : (
+        <MoonStar className="h-4 w-4 text-primary" />
+      )}
     </button>
   );
 }

@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { follows, getDb, posts, users } from "@redpulse/db";
 import type { ProfileSummary, PublicProfile, SuggestedUser, ToggleFollowResponse } from "@redpulse/validation";
+import { createNotification } from "./notification-service.js";
 import { getPostsByAuthor } from "./post-service.js";
 
 function mapProfileSummary(row: {
@@ -179,6 +180,27 @@ export async function getSuggestedUsers(viewerId?: string | null): Promise<Sugge
           and f_view.following_id = ${users.id}
       )`
     : sql<boolean>`false`;
+  const followingPrioritySql = viewerId
+    ? sql<number>`case
+        when exists(
+          select 1
+          from ${follows} f_view
+          where f_view.follower_id = ${viewerId}
+            and f_view.following_id = ${users.id}
+        ) then 1
+        else 0
+      end`
+    : sql<number>`0`;
+  const mutualCountSql = viewerId
+    ? sql<number>`(
+        select count(*)::int
+        from ${follows} viewer_links
+        inner join ${follows} candidate_links
+          on viewer_links.following_id = candidate_links.following_id
+        where viewer_links.follower_id = ${viewerId}
+          and candidate_links.follower_id = ${users.id}
+      )`
+    : sql<number>`0`;
 
   const whereClause = viewerId ? ne(users.id, viewerId) : sql`true`;
 
@@ -199,11 +221,21 @@ export async function getSuggestedUsers(viewerId?: string | null): Promise<Sugge
         where p.author_id = ${users.id}
           and p.parent_id is null
       )`,
+      mutualCount: mutualCountSql,
       isFollowing: isFollowingSql
     })
     .from(users)
     .where(whereClause)
-    .orderBy(desc(users.createdAt))
+    .orderBy(followingPrioritySql, desc(mutualCountSql), desc(sql`(
+      select count(*)::int
+      from follows f
+      where f.following_id = ${users.id}
+    )`), desc(sql`(
+      select count(*)::int
+      from posts p
+      where p.author_id = ${users.id}
+        and p.parent_id is null
+    )`), desc(users.createdAt))
     .limit(5);
 
   return results
@@ -215,6 +247,7 @@ export async function getSuggestedUsers(viewerId?: string | null): Promise<Sugge
       bio: row.bio,
       followersCount: Number(row.followersCount),
       postsCount: Number(row.postsCount),
+      mutualCount: Number(row.mutualCount ?? 0),
       isFollowing: row.isFollowing
     }));
 }
@@ -229,8 +262,14 @@ export async function toggleFollow(targetUserId: string, viewerId: string): Prom
   }
 
   const db = getDb();
+  const actor = await db.query.users.findFirst({
+    where: eq(users.id, viewerId),
+    columns: {
+      username: true
+    }
+  });
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const targetUser = await tx.query.users.findFirst({
       where: eq(users.id, targetUserId),
       columns: { id: true }
@@ -260,10 +299,24 @@ export async function toggleFollow(targetUserId: string, viewerId: string): Prom
       .from(follows)
       .where(eq(follows.followingId, targetUserId));
 
-    return {
+    const result = {
       userId: targetUserId,
       isFollowing: !existing,
       followersCount: Number(counts?.followersCount ?? 0)
     };
+
+    return result;
   });
+
+  if (result?.isFollowing && actor) {
+    await createNotification({
+      userId: targetUserId,
+      actorId: viewerId,
+      type: "follow",
+      entityId: viewerId,
+      message: `@${actor.username} mulai mengikuti Anda.`
+    });
+  }
+
+  return result;
 }

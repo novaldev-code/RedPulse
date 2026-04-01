@@ -28,6 +28,8 @@ GOOGLE_CLIENT_SECRET=...
 CLOUDINARY_CLOUD_NAME=...
 CLOUDINARY_API_KEY=...
 CLOUDINARY_API_SECRET=...
+UPSTASH_REDIS_REST_URL=...
+UPSTASH_REDIS_REST_TOKEN=...
 ```
 
 Kalau Anda ingin preview web deployment tetap bisa memanggil API, `ALLOWED_ORIGINS` bisa dibuat comma-separated dan mendukung wildcard seperti:
@@ -78,7 +80,18 @@ Deploy production ini memakai cookie HttpOnly lintas origin:
 - `secure=true` otomatis saat production
 - API mengizinkan credential request hanya dari origin yang ada di `APP_ORIGIN` / `ALLOWED_ORIGINS`
 
-## 5. Setelah Deploy
+## 5. Rate Limiter Production
+
+RedPulse sekarang otomatis memakai Upstash Redis untuk rate limiter kalau env ini tersedia:
+
+```env
+UPSTASH_REDIS_REST_URL=...
+UPSTASH_REDIS_REST_TOKEN=...
+```
+
+Kalau env Upstash belum diisi, API akan fallback ke memory store lokal. Itu aman untuk development, tapi untuk Vercel production sebaiknya isi Upstash supaya proteksi spam tetap konsisten antar instance.
+
+## 6. Setelah Deploy
 
 Verifikasi cepat:
 

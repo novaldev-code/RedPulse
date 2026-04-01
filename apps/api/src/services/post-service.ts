@@ -1,14 +1,18 @@
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
-import { getDb, likes, media, posts, users } from "@redpulse/db";
+import { follows, getDb, likes, media, posts, savedPosts, users } from "@redpulse/db";
 import type {
   CreateCommentInput,
   CreatePostInput,
+  DeletePostResponse,
+  DeleteCommentResponse,
   FeedPost,
   FeedResponse,
+  FeedScope,
   PostMedia,
   ToggleLikeResponse
 } from "@redpulse/validation";
 import { uploadPostMedia, type UploadMediaFile } from "../lib/media.js";
+import { createNotification, createNotifications } from "./notification-service.js";
 
 const defaultLimit = 10;
 
@@ -46,6 +50,7 @@ function mapFeedPost(row: {
   likeCount: number;
   commentCount: number;
   likedByMe: boolean;
+  savedByMe: boolean;
   media: PostMedia[];
   authorId: string;
   authorUsername: string;
@@ -60,6 +65,7 @@ function mapFeedPost(row: {
     likeCount: Number(row.likeCount),
     commentCount: Number(row.commentCount),
     likedByMe: row.likedByMe,
+    savedByMe: row.savedByMe,
     media: row.media,
     author: {
       id: row.authorId,
@@ -109,6 +115,9 @@ async function getPostById(postId: string, viewerId?: string | null): Promise<Fe
   const likedByMeSql = viewerId
     ? sql<boolean>`coalesce(bool_or(${likes.userId} = ${viewerId}), false)`
     : sql<boolean>`false`;
+  const savedByMeSql = viewerId
+    ? sql<boolean>`exists(select 1 from ${savedPosts} saved where saved.post_id = ${posts.id} and saved.user_id = ${viewerId})`
+    : sql<boolean>`false`;
 
   const [row] = await db
     .select({
@@ -120,6 +129,7 @@ async function getPostById(postId: string, viewerId?: string | null): Promise<Fe
       likeCount: sql<number>`count(${likes.userId})::int`,
       commentCount: sql<number>`(select count(*)::int from posts as replies where replies.parent_id = ${posts.id})`,
       likedByMe: likedByMeSql,
+      savedByMe: savedByMeSql,
       authorId: users.id,
       authorUsername: users.username,
       authorAvatarUrl: users.avatarUrl
@@ -152,6 +162,9 @@ async function getPostsByAuthorIds(authorIds: string[], viewerId?: string | null
   const likedByMeSql = viewerId
     ? sql<boolean>`coalesce(bool_or(${likes.userId} = ${viewerId}), false)`
     : sql<boolean>`false`;
+  const savedByMeSql = viewerId
+    ? sql<boolean>`exists(select 1 from ${savedPosts} saved where saved.post_id = ${posts.id} and saved.user_id = ${viewerId})`
+    : sql<boolean>`false`;
 
   const rows = await db
     .select({
@@ -163,6 +176,7 @@ async function getPostsByAuthorIds(authorIds: string[], viewerId?: string | null
       likeCount: sql<number>`count(${likes.userId})::int`,
       commentCount: sql<number>`(select count(*)::int from posts as replies where replies.parent_id = ${posts.id})`,
       likedByMe: likedByMeSql,
+      savedByMe: savedByMeSql,
       authorId: users.id,
       authorUsername: users.username,
       authorAvatarUrl: users.avatarUrl
@@ -184,14 +198,43 @@ async function getPostsByAuthorIds(authorIds: string[], viewerId?: string | null
   );
 }
 
-export async function getFeed(options: { cursor?: string; limit?: number; viewerId?: string | null }): Promise<FeedResponse> {
+export async function getFeed(options: {
+  cursor?: string;
+  limit?: number;
+  viewerId?: string | null;
+  scope?: FeedScope;
+}): Promise<FeedResponse> {
   const db = getDb();
   const limit = options.limit ?? defaultLimit;
   const cursor = decodeCursor(options.cursor);
+  const scope = options.scope ?? "global";
 
   const likedByMeSql = options.viewerId
     ? sql<boolean>`coalesce(bool_or(${likes.userId} = ${options.viewerId}), false)`
     : sql<boolean>`false`;
+  const savedByMeSql = options.viewerId
+    ? sql<boolean>`exists(select 1 from ${savedPosts} saved where saved.post_id = ${posts.id} and saved.user_id = ${options.viewerId})`
+    : sql<boolean>`false`;
+
+  const followedAuthorIds =
+    scope === "following" && options.viewerId
+      ? [
+          options.viewerId,
+          ...(
+            await db
+              .select({ followingId: follows.followingId })
+              .from(follows)
+              .where(eq(follows.followerId, options.viewerId))
+          ).map((row) => row.followingId)
+        ]
+      : null;
+
+  const baseWhere =
+    scope === "following"
+      ? followedAuthorIds && followedAuthorIds.length > 0
+        ? and(isNull(posts.parentId), inArray(posts.authorId, followedAuthorIds))
+        : sql`false`
+      : isNull(posts.parentId);
 
   const query = db
     .select({
@@ -203,6 +246,7 @@ export async function getFeed(options: { cursor?: string; limit?: number; viewer
       likeCount: sql<number>`count(${likes.userId})::int`,
       commentCount: sql<number>`(select count(*)::int from posts as replies where replies.parent_id = ${posts.id})`,
       likedByMe: likedByMeSql,
+      savedByMe: savedByMeSql,
       authorId: users.id,
       authorUsername: users.username,
       authorAvatarUrl: users.avatarUrl
@@ -213,13 +257,13 @@ export async function getFeed(options: { cursor?: string; limit?: number; viewer
     .where(
       cursor
         ? and(
-            isNull(posts.parentId),
+            baseWhere,
             or(
               lt(posts.createdAt, cursor.createdAt),
               and(eq(posts.createdAt, cursor.createdAt), lt(posts.id, cursor.id))
             )
           )
-        : isNull(posts.parentId)
+        : baseWhere
     )
     .groupBy(posts.id, users.id)
     .orderBy(desc(posts.createdAt), desc(posts.id))
@@ -249,11 +293,14 @@ export async function getFeed(options: { cursor?: string; limit?: number; viewer
 
 export async function toggleLike(postId: string, userId: string): Promise<ToggleLikeResponse | null> {
   const db = getDb();
+  let shouldNotify = false;
+  let postAuthorId: string | null = null;
+  let actorUsername: string | null = null;
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const post = await tx.query.posts.findFirst({
       where: eq(posts.id, postId),
-      columns: { id: true }
+      columns: { id: true, authorId: true }
     });
 
     if (!post) {
@@ -271,6 +318,16 @@ export async function toggleLike(postId: string, userId: string): Promise<Toggle
         postId,
         userId
       });
+      shouldNotify = post.authorId !== userId;
+      postAuthorId = post.authorId;
+
+      const actor = await tx.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: {
+          username: true
+        }
+      });
+      actorUsername = actor?.username ?? null;
     }
 
     const [countResult] = await tx
@@ -286,6 +343,51 @@ export async function toggleLike(postId: string, userId: string): Promise<Toggle
       likeCount: Number(countResult?.likeCount ?? 0)
     };
   });
+
+  if (result && shouldNotify && postAuthorId && actorUsername) {
+    await createNotification({
+      userId: postAuthorId,
+      actorId: userId,
+      type: "like",
+      entityId: postId,
+      message: `@${actorUsername} memberi Pulse ke post Anda.`
+    });
+  }
+
+  return result;
+}
+
+export async function toggleSave(postId: string, userId: string) {
+  const db = getDb();
+
+  return db.transaction(async (tx) => {
+    const post = await tx.query.posts.findFirst({
+      where: eq(posts.id, postId),
+      columns: { id: true }
+    });
+
+    if (!post) {
+      return null;
+    }
+
+    const existingSave = await tx.query.savedPosts.findFirst({
+      where: and(eq(savedPosts.postId, postId), eq(savedPosts.userId, userId))
+    });
+
+    if (existingSave) {
+      await tx.delete(savedPosts).where(and(eq(savedPosts.postId, postId), eq(savedPosts.userId, userId)));
+    } else {
+      await tx.insert(savedPosts).values({
+        postId,
+        userId
+      });
+    }
+
+    return {
+      postId,
+      savedByMe: !existingSave
+    };
+  });
 }
 
 export async function getComments(postId: string, viewerId?: string | null) {
@@ -293,6 +395,9 @@ export async function getComments(postId: string, viewerId?: string | null) {
 
   const likedByMeSql = viewerId
     ? sql<boolean>`coalesce(bool_or(${likes.userId} = ${viewerId}), false)`
+    : sql<boolean>`false`;
+  const savedByMeSql = viewerId
+    ? sql<boolean>`exists(select 1 from ${savedPosts} saved where saved.post_id = ${posts.id} and saved.user_id = ${viewerId})`
     : sql<boolean>`false`;
 
   const rows = await db
@@ -305,6 +410,7 @@ export async function getComments(postId: string, viewerId?: string | null) {
       likeCount: sql<number>`count(${likes.userId})::int`,
       commentCount: sql<number>`(select count(*)::int from posts as replies where replies.parent_id = ${posts.id})`,
       likedByMe: likedByMeSql,
+      savedByMe: savedByMeSql,
       authorId: users.id,
       authorUsername: users.username,
       authorAvatarUrl: users.avatarUrl
@@ -329,6 +435,12 @@ export async function getComments(postId: string, viewerId?: string | null) {
 export async function createPost(input: CreatePostInput, userId: string, files: UploadMediaFile[] = []) {
   const db = getDb();
   const uploadedMedia = await Promise.all(files.map((file, index) => uploadPostMedia(file, userId, index)));
+  const author = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: {
+      username: true
+    }
+  });
 
   const [createdPost] = await db.transaction(async (tx) => {
     const [insertedPost] = await tx
@@ -369,21 +481,42 @@ export async function createPost(input: CreatePostInput, userId: string, files: 
     throw new Error("Created post could not be loaded.");
   }
 
+  const followersRows = await db
+    .select({
+      userId: follows.followerId
+    })
+    .from(follows)
+    .where(eq(follows.followingId, userId));
+
+  if (author) {
+    await createNotifications({
+      userIds: followersRows.map((row) => row.userId),
+      actorId: userId,
+      type: "post",
+      entityId: createdPost.id,
+      message: `@${author.username} membagikan post baru.`
+    });
+  }
+
   return post;
 }
 
 export async function createComment(postId: string, input: CreateCommentInput, userId: string) {
   const db = getDb();
+  let parentAuthorId: string | null = null;
+  let actorUsername: string | null = null;
 
   const [createdComment] = await db.transaction(async (tx) => {
     const parentPost = await tx.query.posts.findFirst({
       where: eq(posts.id, postId),
-      columns: { id: true }
+      columns: { id: true, authorId: true }
     });
 
     if (!parentPost) {
       return [];
     }
+
+    parentAuthorId = parentPost.authorId;
 
     const [insertedComment] = await tx
       .insert(posts)
@@ -395,6 +528,14 @@ export async function createComment(postId: string, input: CreateCommentInput, u
       })
       .returning({ id: posts.id });
 
+    const actor = await tx.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: {
+        username: true
+      }
+    });
+    actorUsername = actor?.username ?? null;
+
     return insertedComment ? [insertedComment] : [];
   });
 
@@ -402,10 +543,151 @@ export async function createComment(postId: string, input: CreateCommentInput, u
     return null;
   }
 
+  if (parentAuthorId && parentAuthorId !== userId && actorUsername) {
+    await createNotification({
+      userId: parentAuthorId,
+      actorId: userId,
+      type: "comment",
+      entityId: postId,
+      message: `@${actorUsername} mengomentari post Anda.`
+    });
+  }
+
   return getPostById(createdComment.id, userId);
+}
+
+export async function updateComment(commentId: string, input: CreateCommentInput, userId: string) {
+  const db = getDb();
+
+  const existingComment = await db.query.posts.findFirst({
+    where: eq(posts.id, commentId),
+    columns: {
+      id: true,
+      authorId: true,
+      parentId: true
+    }
+  });
+
+  if (!existingComment || !existingComment.parentId) {
+    return null;
+  }
+
+  if (existingComment.authorId !== userId) {
+    return "forbidden" as const;
+  }
+
+  await db
+    .update(posts)
+    .set({
+      content: input.content
+    })
+    .where(eq(posts.id, commentId));
+
+  return getPostById(commentId, userId);
+}
+
+export async function deleteComment(commentId: string, userId: string): Promise<DeleteCommentResponse | "forbidden" | null> {
+  const db = getDb();
+
+  const existingComment = await db.query.posts.findFirst({
+    where: eq(posts.id, commentId),
+    columns: {
+      id: true,
+      authorId: true,
+      parentId: true
+    }
+  });
+
+  if (!existingComment || !existingComment.parentId) {
+    return null;
+  }
+
+  if (existingComment.authorId !== userId) {
+    return "forbidden";
+  }
+
+  await db.delete(posts).where(eq(posts.id, commentId));
+
+  return {
+    commentId,
+    postId: existingComment.parentId
+  };
 }
 
 export async function getPostsByAuthor(userId: string, viewerId?: string | null) {
   const posts = await getPostsByAuthorIds([userId], viewerId);
   return posts.filter((post) => post.author.id === userId);
+}
+
+export async function getSavedPosts(userId: string) {
+  const db = getDb();
+
+  const likedByMeSql = sql<boolean>`coalesce(bool_or(${likes.userId} = ${userId}), false)`;
+  const savedByMeSql = sql<boolean>`true`;
+
+  const rows = await db
+    .select({
+      id: posts.id,
+      content: posts.content,
+      location: posts.location,
+      type: posts.type,
+      createdAt: posts.createdAt,
+      likeCount: sql<number>`count(${likes.userId})::int`,
+      commentCount: sql<number>`(select count(*)::int from posts as replies where replies.parent_id = ${posts.id})`,
+      likedByMe: likedByMeSql,
+      savedByMe: savedByMeSql,
+      authorId: users.id,
+      authorUsername: users.username,
+      authorAvatarUrl: users.avatarUrl,
+      savedAt: savedPosts.createdAt
+    })
+    .from(savedPosts)
+    .innerJoin(posts, eq(savedPosts.postId, posts.id))
+    .innerJoin(users, eq(posts.authorId, users.id))
+    .leftJoin(likes, eq(likes.postId, posts.id))
+    .where(and(eq(savedPosts.userId, userId), isNull(posts.parentId)))
+    .groupBy(posts.id, users.id, savedPosts.createdAt)
+    .orderBy(desc(savedPosts.createdAt), desc(posts.id));
+
+  const mediaMap = await getMediaByPostIds(rows.map((row) => row.id));
+
+  return rows.map((row) =>
+    mapFeedPost({
+      ...row,
+      media: mediaMap.get(row.id) ?? []
+    })
+  );
+}
+
+export async function deletePost(
+  postId: string,
+  userId: string
+): Promise<DeletePostResponse | null | "forbidden"> {
+  const db = getDb();
+
+  return db.transaction(async (tx) => {
+    const post = await tx.query.posts.findFirst({
+      where: eq(posts.id, postId),
+      columns: {
+        id: true,
+        authorId: true,
+        parentId: true
+      }
+    });
+
+    if (!post) {
+      return null;
+    }
+
+    if (post.authorId !== userId) {
+      return "forbidden";
+    }
+
+    await tx.delete(posts).where(eq(posts.parentId, postId));
+    await tx.delete(posts).where(eq(posts.id, postId));
+
+    return {
+      postId
+    };
+  });
 }

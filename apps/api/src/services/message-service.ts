@@ -1,5 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { conversationParticipants, conversations, directMessages, getDb, users } from "@redpulse/db";
+import { createNotification } from "./notification-service.js";
 
 function createDirectKey(leftUserId: string, rightUserId: string) {
   return [leftUserId, rightUserId].sort().join(":");
@@ -297,6 +298,14 @@ export async function sendDirectMessage(senderId: string, recipientId: string, c
   if (!summary || !sender) {
     throw new Error("Message conversation could not be loaded.");
   }
+
+  await createNotification({
+    userId: recipientId,
+    actorId: senderId,
+    type: "message",
+    entityId: conversation.id,
+    message: `@${sender.username} mengirim pesan baru untuk Anda.`
+  });
 
   return {
     conversation: summary,

@@ -3,12 +3,21 @@ import cookieParser from "cookie-parser";
 import express from "express";
 import { authRouter } from "./routes/auth.js";
 import { messagesRouter } from "./routes/messages.js";
+import { notificationsRouter } from "./routes/notifications.js";
 import { postsRouter } from "./routes/posts.js";
 import { usersRouter } from "./routes/users.js";
 import { applyCors } from "./lib/cors.js";
+import { createRateLimiter } from "./lib/rate-limit.js";
 import { attachAuthUser } from "./middleware/auth.js";
 
 export const app: Express = express();
+
+const globalApiLimiter = createRateLimiter({
+  windowMs: 60_000,
+  max: 180,
+  keyPrefix: "global-api",
+  message: "Terlalu banyak request dalam waktu singkat. Coba lagi sebentar."
+});
 
 function isMulterLikeError(error: unknown): error is Error & { code?: string; name?: string } {
   return (
@@ -21,6 +30,14 @@ app.use(applyCors);
 app.use(express.json());
 app.use(cookieParser());
 app.use(attachAuthUser);
+app.use((request, response, next) => {
+  if (request.path === "/health") {
+    next();
+    return;
+  }
+
+  globalApiLimiter(request, response, next);
+});
 
 app.get("/health", (_request, response) => {
   response.json({
@@ -30,6 +47,7 @@ app.get("/health", (_request, response) => {
 
 app.use(authRouter);
 app.use(messagesRouter);
+app.use(notificationsRouter);
 app.use(postsRouter);
 app.use(usersRouter);
 

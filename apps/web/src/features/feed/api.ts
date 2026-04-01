@@ -5,11 +5,17 @@ import type {
   CreateCommentResponse,
   CreatePostResponse,
   CurrentProfileResponse,
+  DeleteCommentResponse,
+  DeletePostResponse,
   FeedResponse,
+  FeedScope,
   GoogleAuthInput,
   LoginInput,
+  MarkNotificationsReadResponse,
+  NotificationsResponse,
   PublicProfileResponse,
   RegisterInput,
+  SavedPostsResponse,
   SendDirectMessageInput,
   SendDirectMessageResponse,
   SafeUser,
@@ -17,7 +23,8 @@ import type {
   SuggestedUsersResponse,
   PostCommentsResponse,
   ToggleFollowResponse,
-  ToggleLikeResponse
+  ToggleLikeResponse,
+  ToggleSaveResponse
 } from "@redpulse/validation";
 import { apiFetch } from "../../lib/api";
 
@@ -27,7 +34,7 @@ export type CreatePostPayload = {
   files?: File[];
 };
 
-export async function getPosts(cursor?: string | null) {
+export async function getPosts(cursor?: string | null, scope: FeedScope = "global") {
   const searchParams = new URLSearchParams();
 
   if (cursor) {
@@ -35,12 +42,19 @@ export async function getPosts(cursor?: string | null) {
   }
 
   searchParams.set("limit", "10");
+  searchParams.set("scope", scope);
 
   return apiFetch<FeedResponse>(`/api/posts?${searchParams.toString()}`);
 }
 
 export async function toggleLike(postId: string) {
   return apiFetch<ToggleLikeResponse>(`/api/posts/${postId}/like`, {
+    method: "POST"
+  });
+}
+
+export async function toggleSave(postId: string) {
+  return apiFetch<ToggleSaveResponse>(`/api/posts/${postId}/save`, {
     method: "POST"
   });
 }
@@ -53,6 +67,19 @@ export async function createComment(postId: string, input: CreateCommentInput) {
   return apiFetch<CreateCommentResponse>(`/api/posts/${postId}/comments`, {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+export async function updateComment(commentId: string, input: CreateCommentInput) {
+  return apiFetch<CreateCommentResponse>(`/api/comments/${commentId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function deleteComment(commentId: string) {
+  return apiFetch<DeleteCommentResponse>(`/api/comments/${commentId}`, {
+    method: "DELETE"
   });
 }
 
@@ -97,12 +124,23 @@ export async function createPost(input: CreatePostPayload) {
 
   return apiFetch<CreatePostResponse>("/api/posts", {
     method: "POST",
-    body: formData
+    body: formData,
+    timeoutMs: 45_000
+  });
+}
+
+export async function deletePost(postId: string) {
+  return apiFetch<DeletePostResponse>(`/api/posts/${postId}`, {
+    method: "DELETE"
   });
 }
 
 export async function getProfileSummary() {
   return apiFetch<CurrentProfileResponse>("/api/profile/me");
+}
+
+export async function getSavedPosts() {
+  return apiFetch<SavedPostsResponse>("/api/saved-posts");
 }
 
 export async function updateProfile(input: UpdateProfileInput) {
@@ -149,5 +187,15 @@ export async function sendDirectMessage(userId: string, input: SendDirectMessage
   return apiFetch<SendDirectMessageResponse>(`/api/messages/direct/${userId}`, {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+export async function getNotifications() {
+  return apiFetch<NotificationsResponse>("/api/notifications");
+}
+
+export async function markNotificationsRead() {
+  return apiFetch<MarkNotificationsReadResponse>("/api/notifications/read-all", {
+    method: "POST"
   });
 }

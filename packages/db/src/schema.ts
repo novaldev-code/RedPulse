@@ -4,6 +4,7 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 export const postTypeEnum = pgEnum("post_type", ["post", "reply", "repost"]);
 export const mediaTypeEnum = pgEnum("media_type", ["image", "video"]);
+export const notificationTypeEnum = pgEnum("notification_type", ["follow", "message", "like", "comment", "post"]);
 
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -71,6 +72,22 @@ export const likes = pgTable(
   })
 );
 
+export const savedPosts = pgTable(
+  "saved_posts",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    postId: uuid("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.userId, table.postId] })
+  })
+);
+
 export const conversations = pgTable("conversations", {
   id: uuid("id").defaultRandom().primaryKey(),
   directKey: varchar("direct_key", { length: 80 }).unique(),
@@ -105,13 +122,29 @@ export const directMessages = pgTable("direct_messages", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
 });
 
+export const notifications = pgTable("notifications", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  actorId: uuid("actor_id").references(() => users.id, { onDelete: "set null" }),
+  type: notificationTypeEnum("type").notNull(),
+  entityId: uuid("entity_id"),
+  message: text("message").notNull(),
+  readAt: timestamp("read_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+
 export const usersRelations = relations(users, ({ many }) => ({
   posts: many(posts),
   likes: many(likes),
+  savedPosts: many(savedPosts),
   following: many(follows, { relationName: "follower" }),
   followers: many(follows, { relationName: "following" }),
   conversationParticipants: many(conversationParticipants),
-  directMessages: many(directMessages)
+  directMessages: many(directMessages),
+  notifications: many(notifications, { relationName: "notificationRecipient" }),
+  notificationActivity: many(notifications, { relationName: "notificationActor" })
 }));
 
 export const postsRelations = relations(posts, ({ one, many }) => ({
@@ -121,6 +154,7 @@ export const postsRelations = relations(posts, ({ one, many }) => ({
   }),
   media: many(media),
   likes: many(likes),
+  savedByUsers: many(savedPosts),
   parent: one(posts, {
     fields: [posts.parentId],
     references: [posts.id],
@@ -166,6 +200,17 @@ export const likesRelations = relations(likes, ({ one }) => ({
   })
 }));
 
+export const savedPostsRelations = relations(savedPosts, ({ one }) => ({
+  user: one(users, {
+    fields: [savedPosts.userId],
+    references: [users.id]
+  }),
+  post: one(posts, {
+    fields: [savedPosts.postId],
+    references: [posts.id]
+  })
+}));
+
 export const conversationsRelations = relations(conversations, ({ many }) => ({
   participants: many(conversationParticipants),
   messages: many(directMessages)
@@ -193,13 +238,30 @@ export const directMessagesRelations = relations(directMessages, ({ one }) => ({
   })
 }));
 
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  user: one(users, {
+    fields: [notifications.userId],
+    references: [users.id],
+    relationName: "notificationRecipient"
+  }),
+  actor: one(users, {
+    fields: [notifications.actorId],
+    references: [users.id],
+    relationName: "notificationActor"
+  })
+}));
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Post = typeof posts.$inferSelect;
 export type NewPost = typeof posts.$inferInsert;
+export type SavedPost = typeof savedPosts.$inferSelect;
+export type NewSavedPost = typeof savedPosts.$inferInsert;
 export type Conversation = typeof conversations.$inferSelect;
 export type NewConversation = typeof conversations.$inferInsert;
 export type ConversationParticipant = typeof conversationParticipants.$inferSelect;
 export type NewConversationParticipant = typeof conversationParticipants.$inferInsert;
 export type DirectMessage = typeof directMessages.$inferSelect;
 export type NewDirectMessage = typeof directMessages.$inferInsert;
+export type Notification = typeof notifications.$inferSelect;
+export type NewNotification = typeof notifications.$inferInsert;

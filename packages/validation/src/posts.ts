@@ -1,8 +1,11 @@
 import { z } from "zod";
 
+export const feedScopeSchema = z.enum(["following", "global"]);
+
 export const feedQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
-  limit: z.coerce.number().int().min(1).max(20).default(10)
+  limit: z.coerce.number().int().min(1).max(20).default(10),
+  scope: feedScopeSchema.default("global")
 });
 
 export const createPostSchema = z.object({
@@ -88,6 +91,7 @@ export const suggestedUserSchema = z.object({
   bio: z.string().nullable(),
   followersCount: z.number().int().nonnegative(),
   postsCount: z.number().int().nonnegative(),
+  mutualCount: z.number().int().nonnegative(),
   isFollowing: z.boolean()
 });
 
@@ -104,6 +108,7 @@ export const feedPostSchema = z.object({
   likeCount: z.number().int().nonnegative(),
   commentCount: z.number().int().nonnegative(),
   likedByMe: z.boolean(),
+  savedByMe: z.boolean(),
   media: z.array(postMediaSchema),
   author: postAuthorSchema
 });
@@ -130,6 +135,14 @@ export const postCommentsParamsSchema = z.object({
   id: z.uuid()
 });
 
+export const commentParamsSchema = z.object({
+  id: z.uuid()
+});
+
+export const deletePostParamsSchema = z.object({
+  id: z.uuid()
+});
+
 export const postCommentsResponseSchema = z.object({
   comments: z.array(feedPostSchema)
 });
@@ -138,10 +151,28 @@ export const createCommentResponseSchema = z.object({
   comment: feedPostSchema
 });
 
+export const updateCommentResponseSchema = z.object({
+  comment: feedPostSchema
+});
+
 export const toggleLikeResponseSchema = z.object({
   postId: z.uuid(),
   likedByMe: z.boolean(),
   likeCount: z.number().int().nonnegative()
+});
+
+export const toggleSaveResponseSchema = z.object({
+  postId: z.uuid(),
+  savedByMe: z.boolean()
+});
+
+export const deletePostResponseSchema = z.object({
+  postId: z.uuid()
+});
+
+export const deleteCommentResponseSchema = z.object({
+  commentId: z.uuid(),
+  postId: z.uuid()
 });
 
 export const toggleFollowParamsSchema = z.object({
@@ -159,6 +190,34 @@ export const conversationParticipantSchema = z.object({
   username: z.string(),
   avatarUrl: z.string().nullable(),
   bio: z.string().nullable()
+});
+
+export const notificationTypeSchema = z.enum(["follow", "message", "like", "comment", "post"]);
+
+export const notificationActorSchema = z.object({
+  id: z.uuid(),
+  username: z.string(),
+  avatarUrl: z.string().nullable()
+});
+
+export const notificationSchema = z.object({
+  id: z.uuid(),
+  type: notificationTypeSchema,
+  entityId: z.uuid().nullable(),
+  message: z.string(),
+  readAt: z.string().nullable(),
+  createdAt: z.string(),
+  actor: notificationActorSchema.nullable()
+});
+
+export const notificationsResponseSchema = z.object({
+  notifications: z.array(notificationSchema),
+  unreadCount: z.number().int().nonnegative()
+});
+
+export const markNotificationsReadResponseSchema = z.object({
+  success: z.boolean(),
+  unreadCount: z.number().int().nonnegative()
 });
 
 export const directMessageSchema = z.object({
@@ -206,15 +265,22 @@ export const sendDirectMessageResponseSchema = z.object({
   message: directMessageSchema
 });
 
+export const savedPostsResponseSchema = z.object({
+  items: z.array(feedPostSchema)
+});
+
 export type FeedQuery = z.infer<typeof feedQuerySchema>;
+export type FeedScope = z.infer<typeof feedScopeSchema>;
 export type CreatePostInput = z.infer<typeof createPostSchema>;
 export type CreateCommentInput = z.infer<typeof createCommentSchema>;
+export type CommentParams = z.infer<typeof commentParamsSchema>;
 export type PostMedia = z.infer<typeof postMediaSchema>;
 export type FeedPost = z.infer<typeof feedPostSchema>;
 export type FeedResponse = z.infer<typeof feedResponseSchema>;
 export type CreatePostResponse = z.infer<typeof createPostResponseSchema>;
 export type PostCommentsResponse = z.infer<typeof postCommentsResponseSchema>;
 export type CreateCommentResponse = z.infer<typeof createCommentResponseSchema>;
+export type UpdateCommentResponse = z.infer<typeof updateCommentResponseSchema>;
 export type ProfileSummary = z.infer<typeof profileSummarySchema>;
 export type CurrentProfileResponse = z.infer<typeof currentProfileResponseSchema>;
 export type PublicProfile = z.infer<typeof publicProfileSchema>;
@@ -223,10 +289,19 @@ export type SuggestedUser = z.infer<typeof suggestedUserSchema>;
 export type SuggestedUsersResponse = z.infer<typeof suggestedUsersResponseSchema>;
 export type ToggleLikeParams = z.infer<typeof toggleLikeParamsSchema>;
 export type PostCommentsParams = z.infer<typeof postCommentsParamsSchema>;
+export type DeletePostParams = z.infer<typeof deletePostParamsSchema>;
 export type ToggleLikeResponse = z.infer<typeof toggleLikeResponseSchema>;
+export type ToggleSaveResponse = z.infer<typeof toggleSaveResponseSchema>;
+export type DeletePostResponse = z.infer<typeof deletePostResponseSchema>;
+export type DeleteCommentResponse = z.infer<typeof deleteCommentResponseSchema>;
 export type ToggleFollowParams = z.infer<typeof toggleFollowParamsSchema>;
 export type ToggleFollowResponse = z.infer<typeof toggleFollowResponseSchema>;
 export type ConversationParticipant = z.infer<typeof conversationParticipantSchema>;
+export type NotificationType = z.infer<typeof notificationTypeSchema>;
+export type NotificationActor = z.infer<typeof notificationActorSchema>;
+export type Notification = z.infer<typeof notificationSchema>;
+export type NotificationsResponse = z.infer<typeof notificationsResponseSchema>;
+export type MarkNotificationsReadResponse = z.infer<typeof markNotificationsReadResponseSchema>;
 export type DirectMessage = z.infer<typeof directMessageSchema>;
 export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
 export type ConversationsResponse = z.infer<typeof conversationsResponseSchema>;
@@ -235,3 +310,4 @@ export type ConversationMessagesResponse = z.infer<typeof conversationMessagesRe
 export type SendDirectMessageParams = z.infer<typeof sendDirectMessageParamsSchema>;
 export type SendDirectMessageInput = z.infer<typeof sendDirectMessageSchema>;
 export type SendDirectMessageResponse = z.infer<typeof sendDirectMessageResponseSchema>;
+export type SavedPostsResponse = z.infer<typeof savedPostsResponseSchema>;

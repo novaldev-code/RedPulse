@@ -2,10 +2,32 @@ import { Router, type Router as ExpressRouter } from "express";
 import { googleAuthSchema, loginSchema, registerSchema } from "@redpulse/validation";
 import { exchangeGoogleCode, getAppOrigin, getGoogleAuthUrl, getGoogleClientId, verifyGoogleCredential } from "../lib/google-auth.js";
 import { clearAuthCookie, setAuthCookie, signAuthToken } from "../lib/jwt.js";
+import { createRateLimiter } from "../lib/rate-limit.js";
 import { authenticate } from "../middleware/auth.js";
 import { getSafeUserById, loginUser, loginWithGoogleAccount, registerUser } from "../services/auth-service.js";
 
 export const authRouter: ExpressRouter = Router();
+
+const registerLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 8,
+  keyPrefix: "auth-register",
+  message: "Terlalu banyak percobaan daftar. Tunggu sebentar lalu coba lagi."
+});
+
+const loginLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 12,
+  keyPrefix: "auth-login",
+  message: "Terlalu banyak percobaan login. Tunggu sebentar lalu coba lagi."
+});
+
+const googleAuthLimiter = createRateLimiter({
+  windowMs: 5 * 60 * 1000,
+  max: 20,
+  keyPrefix: "auth-google",
+  message: "Terlalu banyak percobaan login Google. Tunggu sebentar lalu coba lagi."
+});
 
 function getGoogleCallbackErrorCode(error: unknown) {
   if (!(error instanceof Error)) {
@@ -92,7 +114,7 @@ function getGoogleLoginErrorResponse(error: unknown) {
   };
 }
 
-authRouter.post("/register", async (request, response) => {
+authRouter.post("/register", registerLimiter, async (request, response) => {
   const parsed = registerSchema.safeParse(request.body);
 
   if (!parsed.success) {
@@ -123,7 +145,7 @@ authRouter.post("/register", async (request, response) => {
   });
 });
 
-authRouter.post("/login", async (request, response) => {
+authRouter.post("/login", loginLimiter, async (request, response) => {
   const parsed = loginSchema.safeParse(request.body);
 
   if (!parsed.success) {
@@ -210,7 +232,7 @@ authRouter.get("/auth/google/callback", async (request, response) => {
   }
 });
 
-authRouter.post("/auth/google", async (request, response) => {
+authRouter.post("/auth/google", googleAuthLimiter, async (request, response) => {
   const parsed = googleAuthSchema.safeParse(request.body);
 
   if (!parsed.success) {
