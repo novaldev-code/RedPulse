@@ -2,13 +2,15 @@ import "express";
 
 declare global {
   namespace Express {
-    interface MulterFile {
-      fieldname: string;
-      originalname: string;
-      encoding: string;
-      mimetype: string;
-      size: number;
-      buffer: Buffer;
+    namespace Multer {
+      interface File {
+        fieldname: string;
+        originalname: string;
+        encoding: string;
+        mimetype: string;
+        size: number;
+        buffer: Buffer;
+      }
     }
 
     interface Request {
@@ -16,8 +18,8 @@ declare global {
         id: string;
         username: string;
       };
-      file?: MulterFile;
-      files?: MulterFile[] | { [fieldname: string]: MulterFile[] };
+      file?: Multer.File;
+      files?: Multer.File[] | { [fieldname: string]: Multer.File[] };
     }
   }
 }
