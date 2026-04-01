@@ -1,0 +1,32 @@
+{
+  "name": "@redpulse/api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --outDir dist --clean",
+    "dev": "tsx watch src/index.ts",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@redpulse/db": "workspace:*",
+    "@redpulse/validation": "workspace:*",
+    "bcryptjs": "3.0.3",
+    "cloudinary": "^2.9.0",
+    "cookie-parser": "1.4.7",
+    "dotenv": "17.2.3",
+    "drizzle-orm": "0.45.2",
+    "express": "5.2.1",
+    "google-auth-library": "10.6.2",
+    "jsonwebtoken": "9.0.3",
+    "multer": "^2.1.1",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "1.4.9",
+    "@types/express": "5.0.3",
+    "@types/jsonwebtoken": "9.0.10",
+    "tsx": "4.21.0"
+  }
+}

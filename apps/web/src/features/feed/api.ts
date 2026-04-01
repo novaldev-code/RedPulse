@@ -1,0 +1,126 @@
+import type {
+  CreateCommentInput,
+  CreateCommentResponse,
+  CreatePostResponse,
+  CurrentProfileResponse,
+  FeedResponse,
+  GoogleAuthInput,
+  LoginInput,
+  PublicProfileResponse,
+  RegisterInput,
+  SafeUser,
+  SuggestedUsersResponse,
+  PostCommentsResponse,
+  ToggleFollowResponse,
+  ToggleLikeResponse
+} from "@redpulse/validation";
+import { apiFetch } from "../../lib/api";
+
+export type CreatePostPayload = {
+  content?: string;
+  location?: string;
+  files?: File[];
+};
+
+export async function getPosts(cursor?: string | null) {
+  const searchParams = new URLSearchParams();
+
+  if (cursor) {
+    searchParams.set("cursor", cursor);
+  }
+
+  searchParams.set("limit", "10");
+
+  return apiFetch<FeedResponse>(`/api/posts?${searchParams.toString()}`);
+}
+
+export async function toggleLike(postId: string) {
+  return apiFetch<ToggleLikeResponse>(`/api/posts/${postId}/like`, {
+    method: "POST"
+  });
+}
+
+export async function getComments(postId: string) {
+  return apiFetch<PostCommentsResponse>(`/api/posts/${postId}/comments`);
+}
+
+export async function createComment(postId: string, input: CreateCommentInput) {
+  return apiFetch<CreateCommentResponse>(`/api/posts/${postId}/comments`, {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function registerUser(input: RegisterInput) {
+  return apiFetch<{ user: SafeUser }>("/register", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function loginUser(input: LoginInput) {
+  return apiFetch<{ user: SafeUser }>("/login", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function logoutUser() {
+  return apiFetch<void>("/logout", {
+    method: "POST"
+  });
+}
+
+export async function getCurrentUser() {
+  return apiFetch<{ user: SafeUser }>("/me");
+}
+
+export async function createPost(input: CreatePostPayload) {
+  const formData = new FormData();
+
+  if (input.content?.trim()) {
+    formData.set("content", input.content.trim());
+  }
+
+  if (input.location?.trim()) {
+    formData.set("location", input.location.trim());
+  }
+
+  for (const file of input.files ?? []) {
+    formData.append("media", file);
+  }
+
+  return apiFetch<CreatePostResponse>("/api/posts", {
+    method: "POST",
+    body: formData
+  });
+}
+
+export async function getProfileSummary() {
+  return apiFetch<CurrentProfileResponse>("/api/profile/me");
+}
+
+export async function getPublicProfile(userId: string) {
+  return apiFetch<PublicProfileResponse>(`/api/users/${userId}/profile`);
+}
+
+export async function getSuggestedUsers() {
+  return apiFetch<SuggestedUsersResponse>("/api/users/suggestions");
+}
+
+export async function toggleFollow(userId: string) {
+  return apiFetch<ToggleFollowResponse>(`/api/users/${userId}/follow`, {
+    method: "POST"
+  });
+}
+
+export async function getGoogleConfig() {
+  return apiFetch<{ clientId: string }>("/auth/google/config");
+}
+
+export async function loginWithGoogle(input: GoogleAuthInput) {
+  return apiFetch<{ user: SafeUser }>("/auth/google", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}

@@ -1,0 +1,23 @@
+{
+  "name": "redpulse-monorepo",
+  "private": true,
+  "packageManager": "pnpm@10.6.5",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "db:generate": "pnpm --filter @redpulse/db db:generate",
+    "db:migrate": "pnpm --filter @redpulse/db db:migrate",
+    "db:studio": "pnpm --filter @redpulse/db db:studio"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "autoprefixer": "10.4.21",
+    "postcss": "8.5.6",
+    "tailwindcss": "3.4.19",
+    "tsup": "8.5.1",
+    "turbo": "2.9.3",
+    "typescript": "5.9.3"
+  }
+}

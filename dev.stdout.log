@@ -1,0 +1,29 @@
+
+> redpulse-monorepo@ dev D:\sosialmedia
+> turbo run dev --parallel
+
+
+   • Packages in scope: @redpulse/api, @redpulse/db, @redpulse/ui, @redpulse/validation, @redpulse/web
+   • Running dev in 5 packages
+   • Remote caching disabled
+
+@redpulse/web:dev: cache bypass, force executing 20f047574b9005a8
+@redpulse/api:dev: cache bypass, force executing ecdd867f70dd5602
+@redpulse/web:dev: 
+@redpulse/web:dev: > @redpulse/web@0.0.0 dev D:\sosialmedia\apps\web
+@redpulse/web:dev: > vite
+@redpulse/web:dev: 
+@redpulse/api:dev: 
+@redpulse/api:dev: > @redpulse/api@0.0.0 dev D:\sosialmedia\apps\api
+@redpulse/api:dev: > tsx watch src/index.ts
+@redpulse/api:dev: 
+@redpulse/web:dev: [2m19.42.56[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m Re-optimizing dependencies because lockfile has changed
+@redpulse/web:dev: Port 5173 is in use, trying another one...
+@redpulse/web:dev: 
+@redpulse/web:dev:   [32m[1mVITE[22m v7.3.1[39m  [2mready in [0m[1m961[22m[2m[0m ms[22m
+@redpulse/web:dev: 
+@redpulse/web:dev:   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5174[22m/[39m
+@redpulse/web:dev: [2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+@redpulse/api:dev: [dotenv@17.2.3] injecting env (5) from ..\..\.env -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+@redpulse/api:dev: [dotenv@17.2.3] injecting env (0) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+@redpulse/api:dev: RedPulse API listening on http://localhost:3001
