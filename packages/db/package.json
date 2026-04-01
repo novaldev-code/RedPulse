@@ -27,6 +27,8 @@
   },
   "devDependencies": {
     "@types/pg": "8.15.5",
-    "drizzle-kit": "0.31.10"
+    "drizzle-kit": "0.31.10",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3"
   }
 }
