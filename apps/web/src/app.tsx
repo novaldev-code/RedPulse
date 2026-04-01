@@ -6,6 +6,7 @@ import type {
   LoginInput,
   PublicProfile,
   RegisterInput,
+  SafeUser,
   SuggestedUser
 } from "@redpulse/validation";
 import {
@@ -49,6 +50,8 @@ import {
   useSendDirectMessageMutation,
   useSuggestedUsersQuery,
   useToggleFollowMutation
+  ,
+  useUpdateProfileMutation
 } from "./features/feed/hooks";
 
 type AppView = "home" | "search" | "explore" | "messages" | "notifications" | "create" | "profile" | "more";
@@ -177,6 +180,9 @@ export default function App() {
   const [selectedMessageUserId, setSelectedMessageUserId] = useState<string | null>(null);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [messageDraft, setMessageDraft] = useState("");
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [profileBioDraft, setProfileBioDraft] = useState("");
+  const [profileAvatarDraft, setProfileAvatarDraft] = useState("");
   const [loginForm, setLoginForm] = useState<LoginInput>(initialLoginState);
   const [registerForm, setRegisterForm] = useState<RegisterInput>(initialRegisterState);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -240,6 +246,11 @@ export default function App() {
   });
   const googleLoginMutation = useGoogleLoginMutation(() => {
     setAuthError(null);
+  });
+  const updateProfileMutation = useUpdateProfileMutation((user: SafeUser) => {
+    setEditingProfile(false);
+    setProfileBioDraft(user.bio ?? "");
+    setProfileAvatarDraft(user.avatarUrl ?? "");
   });
   const sendDirectMessageMutation = useSendDirectMessageMutation((conversationId) => {
     setSelectedConversationId(conversationId);
@@ -457,6 +468,15 @@ export default function App() {
       }
     };
   }, [mediaPreviews]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
+    setProfileBioDraft(currentUser.bio ?? "");
+    setProfileAvatarDraft(currentUser.avatarUrl ?? "");
+  }, [currentUser?.avatarUrl, currentUser?.bio, currentUser?.id]);
 
   function handlePostError(error: unknown) {
     if (error instanceof ApiError) {
@@ -1040,6 +1060,66 @@ export default function App() {
                   </Button>
                 </div>
               ) : null}
+              {isOwnProfile ? (
+                <div className="space-y-4">
+                  <div className="flex gap-3">
+                    <Button className="rounded-full px-5" variant="outline" onClick={() => setEditingProfile((current) => !current)}>
+                      {editingProfile ? "Tutup edit" : "Edit profil"}
+                    </Button>
+                    <Button className="rounded-full px-5" variant="outline" onClick={() => setCurrentView("more")}>
+                      <Menu className="mr-2 h-4 w-4" />
+                      Lainnya
+                    </Button>
+                    <Button
+                      className="rounded-full px-5"
+                      variant="ghost"
+                      disabled={logoutMutation.isPending}
+                      onClick={() => logoutMutation.mutate()}
+                    >
+                      <LogOut className="mr-2 h-4 w-4" />
+                      {logoutMutation.isPending ? "Keluar..." : "Logout"}
+                    </Button>
+                  </div>
+                  {editingProfile ? (
+                    <form
+                      className="space-y-3 rounded-[22px] border border-border bg-card/60 p-4"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        updateProfileMutation.mutate({
+                          bio: profileBioDraft,
+                          avatarUrl: profileAvatarDraft
+                        });
+                      }}
+                    >
+                      <label className="block space-y-2">
+                        <span className="text-sm font-medium text-foreground/76">Bio</span>
+                        <textarea
+                          className="min-h-24 w-full rounded-2xl border border-border bg-card/70 px-4 py-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground/70 focus:border-primary/45 focus:bg-card"
+                          maxLength={160}
+                          onChange={(event) => setProfileBioDraft(event.target.value)}
+                          placeholder="Tulis bio singkat yang mewakili Anda"
+                          value={profileBioDraft}
+                        />
+                      </label>
+                      <label className="block space-y-2">
+                        <span className="text-sm font-medium text-foreground/76">Avatar URL</span>
+                        <input
+                          className="w-full rounded-2xl border border-border bg-card/70 px-4 py-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground/70 focus:border-primary/45 focus:bg-card"
+                          onChange={(event) => setProfileAvatarDraft(event.target.value)}
+                          placeholder="https://..."
+                          value={profileAvatarDraft}
+                        />
+                      </label>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-xs uppercase tracking-[0.18em] text-foreground/35">{profileBioDraft.length}/160</span>
+                        <Button className="rounded-full px-5" disabled={updateProfileMutation.isPending} type="submit">
+                          {updateProfileMutation.isPending ? "Menyimpan..." : "Simpan profil"}
+                        </Button>
+                      </div>
+                    </form>
+                  ) : null}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
           <Card className={surfaceClass}>
@@ -1149,6 +1229,17 @@ export default function App() {
             </Button>
             <Button className="flex-1 rounded-full" size="sm" variant="outline" onClick={() => setCurrentView("search")}>
               Cari akun
+            </Button>
+          </div>
+
+          <div className="mt-3 flex gap-2 lg:hidden">
+            <Button className="flex-1 rounded-full" size="sm" variant="ghost" onClick={() => setCurrentView("more")}>
+              <Menu className="mr-2 h-4 w-4" />
+              Lainnya
+            </Button>
+            <Button className="flex-1 rounded-full" size="sm" variant="ghost" disabled={logoutMutation.isPending} onClick={() => logoutMutation.mutate()}>
+              <LogOut className="mr-2 h-4 w-4" />
+              {logoutMutation.isPending ? "Keluar..." : "Logout"}
             </Button>
           </div>
         </section>
@@ -1654,30 +1745,8 @@ export default function App() {
         </div>
       </nav>
 
-      <div className="fixed right-4 top-4 z-30 flex items-center gap-2 lg:hidden">
-        <button
-          className={cn(
-            "inline-flex h-11 items-center justify-center rounded-full border px-4 text-sm font-semibold shadow-[0_12px_28px_rgba(0,0,0,0.16)] backdrop-blur transition",
-            navChromeClass
-          )}
-          onClick={() => setCurrentView("more")}
-          type="button"
-        >
-          <Menu className="mr-2 h-4 w-4" />
-          Lainnya
-        </button>
+      <div className="fixed right-4 top-4 z-30 lg:hidden">
         <ThemeToggle themeMode={themeMode} onToggle={() => setThemeMode(isLightTheme ? "dark" : "light")} />
-        <button
-          className={cn(
-            "inline-flex h-11 w-11 items-center justify-center rounded-full border shadow-[0_12px_28px_rgba(0,0,0,0.16)] backdrop-blur transition",
-            navChromeClass
-          )}
-          disabled={logoutMutation.isPending}
-          onClick={() => logoutMutation.mutate()}
-          type="button"
-        >
-          <LogOut className="h-4 w-4" />
-        </button>
       </div>
     </main>
   );

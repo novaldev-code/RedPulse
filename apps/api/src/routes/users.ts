@@ -1,7 +1,8 @@
 import { Router, type Router as ExpressRouter } from "express";
-import { toggleFollowParamsSchema } from "@redpulse/validation";
+import { toggleFollowParamsSchema, updateProfileSchema } from "@redpulse/validation";
 import { authenticate } from "../middleware/auth.js";
 import { getProfileSummary, getPublicProfile, getSuggestedUsers, toggleFollow } from "../services/social-service.js";
+import { updateProfile } from "../services/auth-service.js";
 
 export const usersRouter: ExpressRouter = Router();
 
@@ -16,6 +17,29 @@ usersRouter.get("/api/profile/me", authenticate, async (request, response) => {
   }
 
   response.json({ profile });
+});
+
+usersRouter.patch("/api/profile/me", authenticate, async (request, response) => {
+  const parsed = updateProfileSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    response.status(400).json({
+      message: "Invalid profile payload.",
+      issues: parsed.error.flatten()
+    });
+    return;
+  }
+
+  const user = await updateProfile(request.user!.id, parsed.data);
+
+  if (!user) {
+    response.status(404).json({
+      message: "Profile not found."
+    });
+    return;
+  }
+
+  response.json({ user });
 });
 
 usersRouter.get("/api/users/suggestions", async (request, response) => {

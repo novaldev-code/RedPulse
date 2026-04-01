@@ -38,7 +38,36 @@ export const safeUserSchema = z.object({
   createdAt: z.string()
 });
 
+export const updateProfileSchema = z.object({
+  bio: z
+    .string()
+    .trim()
+    .max(160, "Bio must be 160 characters or fewer.")
+    .optional()
+    .transform((value) => {
+      if (!value) {
+        return null;
+      }
+
+      return value.length > 0 ? value : null;
+    }),
+  avatarUrl: z
+    .string()
+    .trim()
+    .url("Avatar URL must be a valid URL.")
+    .optional()
+    .or(z.literal(""))
+    .transform((value) => {
+      if (!value) {
+        return null;
+      }
+
+      return value;
+    })
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type GoogleAuthInput = z.infer<typeof googleAuthSchema>;
 export type SafeUser = z.infer<typeof safeUserSchema>;
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;

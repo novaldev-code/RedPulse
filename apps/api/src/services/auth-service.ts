@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import { getDb, users } from "@redpulse/db";
 import { and, eq, or } from "drizzle-orm";
-import type { LoginInput, RegisterInput, SafeUser } from "@redpulse/validation";
+import type { LoginInput, RegisterInput, SafeUser, UpdateProfileInput } from "@redpulse/validation";
 
 function toSafeUser(user: {
   id: string;
@@ -247,4 +247,26 @@ export async function loginWithGoogleAccount(input: {
   }
 
   return toSafeUser(created);
+}
+
+export async function updateProfile(userId: string, input: UpdateProfileInput): Promise<SafeUser | null> {
+  const db = getDb();
+
+  const [updated] = await db
+    .update(users)
+    .set({
+      bio: input.bio ?? null,
+      avatarUrl: input.avatarUrl ?? null
+    })
+    .where(eq(users.id, userId))
+    .returning({
+      id: users.id,
+      username: users.username,
+      email: users.email,
+      avatarUrl: users.avatarUrl,
+      bio: users.bio,
+      createdAt: users.createdAt
+    });
+
+  return updated ? toSafeUser(updated) : null;
 }

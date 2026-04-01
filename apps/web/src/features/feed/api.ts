@@ -13,6 +13,7 @@ import type {
   SendDirectMessageInput,
   SendDirectMessageResponse,
   SafeUser,
+  UpdateProfileInput,
   SuggestedUsersResponse,
   PostCommentsResponse,
   ToggleFollowResponse,
@@ -102,6 +103,13 @@ export async function createPost(input: CreatePostPayload) {
 
 export async function getProfileSummary() {
   return apiFetch<CurrentProfileResponse>("/api/profile/me");
+}
+
+export async function updateProfile(input: UpdateProfileInput) {
+  return apiFetch<{ user: SafeUser }>("/api/profile/me", {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  });
 }
 
 export async function getPublicProfile(userId: string) {

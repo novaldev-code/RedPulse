@@ -10,6 +10,7 @@ import type {
   RegisterInput,
   SendDirectMessageInput,
   SafeUser,
+  UpdateProfileInput,
   SuggestedUsersResponse
 } from "@redpulse/validation";
 import {
@@ -30,7 +31,8 @@ import {
   registerUser,
   sendDirectMessage,
   toggleFollow,
-  toggleLike
+  toggleLike,
+  updateProfile
 } from "./api";
 import type { CreatePostPayload } from "./api";
 
@@ -228,6 +230,21 @@ export function useLogoutMutation(onSuccess: () => void) {
       await queryClient.invalidateQueries({ queryKey: postsQueryKey });
       await queryClient.invalidateQueries({ queryKey: suggestedUsersQueryKey });
       onSuccess();
+    }
+  });
+}
+
+export function useUpdateProfileMutation(onSuccess?: (user: SafeUser) => void) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: UpdateProfileInput) => updateProfile(input),
+    onSuccess: async (result) => {
+      queryClient.setQueryData(currentUserQueryKey, { user: result.user });
+      await queryClient.invalidateQueries({ queryKey: profileSummaryQueryKey });
+      await queryClient.invalidateQueries({ queryKey: suggestedUsersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: postsQueryKey });
+      onSuccess?.(result.user);
     }
   });
 }
