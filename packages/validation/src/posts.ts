@@ -154,6 +154,58 @@ export const toggleFollowResponseSchema = z.object({
   followersCount: z.number().int().nonnegative()
 });
 
+export const conversationParticipantSchema = z.object({
+  id: z.uuid(),
+  username: z.string(),
+  avatarUrl: z.string().nullable(),
+  bio: z.string().nullable()
+});
+
+export const directMessageSchema = z.object({
+  id: z.uuid(),
+  content: z.string(),
+  createdAt: z.string(),
+  senderId: z.uuid(),
+  sender: conversationParticipantSchema
+});
+
+export const conversationSummarySchema = z.object({
+  id: z.uuid(),
+  participant: conversationParticipantSchema,
+  lastMessage: directMessageSchema.nullable(),
+  updatedAt: z.string()
+});
+
+export const conversationsResponseSchema = z.object({
+  conversations: z.array(conversationSummarySchema)
+});
+
+export const conversationMessagesParamsSchema = z.object({
+  id: z.uuid()
+});
+
+export const conversationMessagesResponseSchema = z.object({
+  conversation: conversationSummarySchema,
+  messages: z.array(directMessageSchema)
+});
+
+export const sendDirectMessageParamsSchema = z.object({
+  userId: z.uuid()
+});
+
+export const sendDirectMessageSchema = z.object({
+  content: z
+    .string()
+    .trim()
+    .min(1, "Message content is required.")
+    .max(1000, "Message content must be 1000 characters or fewer.")
+});
+
+export const sendDirectMessageResponseSchema = z.object({
+  conversation: conversationSummarySchema,
+  message: directMessageSchema
+});
+
 export type FeedQuery = z.infer<typeof feedQuerySchema>;
 export type CreatePostInput = z.infer<typeof createPostSchema>;
 export type CreateCommentInput = z.infer<typeof createCommentSchema>;
@@ -174,3 +226,12 @@ export type PostCommentsParams = z.infer<typeof postCommentsParamsSchema>;
 export type ToggleLikeResponse = z.infer<typeof toggleLikeResponseSchema>;
 export type ToggleFollowParams = z.infer<typeof toggleFollowParamsSchema>;
 export type ToggleFollowResponse = z.infer<typeof toggleFollowResponseSchema>;
+export type ConversationParticipant = z.infer<typeof conversationParticipantSchema>;
+export type DirectMessage = z.infer<typeof directMessageSchema>;
+export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
+export type ConversationsResponse = z.infer<typeof conversationsResponseSchema>;
+export type ConversationMessagesParams = z.infer<typeof conversationMessagesParamsSchema>;
+export type ConversationMessagesResponse = z.infer<typeof conversationMessagesResponseSchema>;
+export type SendDirectMessageParams = z.infer<typeof sendDirectMessageParamsSchema>;
+export type SendDirectMessageInput = z.infer<typeof sendDirectMessageSchema>;
+export type SendDirectMessageResponse = z.infer<typeof sendDirectMessageResponseSchema>;

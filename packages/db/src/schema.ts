@@ -71,11 +71,47 @@ export const likes = pgTable(
   })
 );
 
+export const conversations = pgTable("conversations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  directKey: varchar("direct_key", { length: 80 }).unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+
+export const conversationParticipants = pgTable(
+  "conversation_participants",
+  {
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.conversationId, table.userId] })
+  })
+);
+
+export const directMessages = pgTable("direct_messages", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  conversationId: uuid("conversation_id")
+    .notNull()
+    .references(() => conversations.id, { onDelete: "cascade" }),
+  senderId: uuid("sender_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+});
+
 export const usersRelations = relations(users, ({ many }) => ({
   posts: many(posts),
   likes: many(likes),
   following: many(follows, { relationName: "follower" }),
-  followers: many(follows, { relationName: "following" })
+  followers: many(follows, { relationName: "following" }),
+  conversationParticipants: many(conversationParticipants),
+  directMessages: many(directMessages)
 }));
 
 export const postsRelations = relations(posts, ({ one, many }) => ({
@@ -130,7 +166,40 @@ export const likesRelations = relations(likes, ({ one }) => ({
   })
 }));
 
+export const conversationsRelations = relations(conversations, ({ many }) => ({
+  participants: many(conversationParticipants),
+  messages: many(directMessages)
+}));
+
+export const conversationParticipantsRelations = relations(conversationParticipants, ({ one }) => ({
+  conversation: one(conversations, {
+    fields: [conversationParticipants.conversationId],
+    references: [conversations.id]
+  }),
+  user: one(users, {
+    fields: [conversationParticipants.userId],
+    references: [users.id]
+  })
+}));
+
+export const directMessagesRelations = relations(directMessages, ({ one }) => ({
+  conversation: one(conversations, {
+    fields: [directMessages.conversationId],
+    references: [conversations.id]
+  }),
+  sender: one(users, {
+    fields: [directMessages.senderId],
+    references: [users.id]
+  })
+}));
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Post = typeof posts.$inferSelect;
 export type NewPost = typeof posts.$inferInsert;
+export type Conversation = typeof conversations.$inferSelect;
+export type NewConversation = typeof conversations.$inferInsert;
+export type ConversationParticipant = typeof conversationParticipants.$inferSelect;
+export type NewConversationParticipant = typeof conversationParticipants.$inferInsert;
+export type DirectMessage = typeof directMessages.$inferSelect;
+export type NewDirectMessage = typeof directMessages.$inferInsert;

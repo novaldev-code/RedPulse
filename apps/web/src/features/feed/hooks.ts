@@ -1,15 +1,20 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import type {
+  ConversationMessagesResponse,
+  ConversationsResponse,
   CreateCommentInput,
   PostCommentsResponse,
   FeedResponse,
   GoogleAuthInput,
   LoginInput,
   RegisterInput,
+  SendDirectMessageInput,
   SafeUser,
   SuggestedUsersResponse
 } from "@redpulse/validation";
 import {
+  getConversationMessages,
+  getConversations,
   createComment,
   createPost,
   getComments,
@@ -23,6 +28,7 @@ import {
   loginWithGoogle,
   logoutUser,
   registerUser,
+  sendDirectMessage,
   toggleFollow,
   toggleLike
 } from "./api";
@@ -35,6 +41,8 @@ export const profileSummaryQueryKey = ["profile-summary"] as const;
 export const publicProfileQueryKey = (userId: string) => ["public-profile", userId] as const;
 export const suggestedUsersQueryKey = ["suggested-users"] as const;
 export const googleConfigQueryKey = ["google-config"] as const;
+export const conversationsQueryKey = ["conversations"] as const;
+export const conversationMessagesQueryKey = (conversationId: string) => ["conversation-messages", conversationId] as const;
 
 export function usePostsQuery() {
   return useInfiniteQuery({
@@ -92,6 +100,24 @@ export function useGoogleConfigQuery() {
   return useQuery({
     queryKey: googleConfigQueryKey,
     queryFn: getGoogleConfig,
+    retry: false
+  });
+}
+
+export function useConversationsQuery(enabled: boolean) {
+  return useQuery({
+    queryKey: conversationsQueryKey,
+    queryFn: getConversations,
+    enabled,
+    retry: false
+  });
+}
+
+export function useConversationMessagesQuery(conversationId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: conversationId ? conversationMessagesQueryKey(conversationId) : ["conversation-messages", "idle"],
+    queryFn: () => getConversationMessages(conversationId!),
+    enabled: enabled && Boolean(conversationId),
     retry: false
   });
 }
@@ -304,6 +330,42 @@ export function useGoogleLoginMutation(onSuccess: (user: SafeUser) => void) {
       await queryClient.invalidateQueries({ queryKey: suggestedUsersQueryKey });
       await queryClient.invalidateQueries({ queryKey: postsQueryKey });
       onSuccess(result.user);
+    }
+  });
+}
+
+export function useSendDirectMessageMutation(onSuccess?: (conversationId: string) => void) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ userId, input }: { userId: string; input: SendDirectMessageInput }) => sendDirectMessage(userId, input),
+    onSuccess: async (result) => {
+      queryClient.setQueryData<ConversationsResponse | undefined>(conversationsQueryKey, (current) => {
+        const nextConversation = result.conversation;
+
+        if (!current) {
+          return {
+            conversations: [nextConversation]
+          };
+        }
+
+        const conversations = current.conversations.filter((conversation) => conversation.id !== nextConversation.id);
+        return {
+          conversations: [nextConversation, ...conversations]
+        };
+      });
+
+      queryClient.setQueryData<ConversationMessagesResponse | undefined>(
+        conversationMessagesQueryKey(result.conversation.id),
+        (current) => ({
+          conversation: result.conversation,
+          messages: [...(current?.messages ?? []), result.message]
+        })
+      );
+
+      await queryClient.invalidateQueries({ queryKey: conversationsQueryKey });
+      await queryClient.invalidateQueries({ queryKey: conversationMessagesQueryKey(result.conversation.id) });
+      onSuccess?.(result.conversation.id);
     }
   });
 }

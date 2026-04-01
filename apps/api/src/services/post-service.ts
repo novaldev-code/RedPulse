@@ -328,12 +328,7 @@ export async function getComments(postId: string, viewerId?: string | null) {
 
 export async function createPost(input: CreatePostInput, userId: string, files: UploadMediaFile[] = []) {
   const db = getDb();
-
-  const uploadedMedia: Array<{ url: string; type: "image" | "video"; sortOrder: number }> = [];
-
-  for (const [index, file] of files.entries()) {
-    uploadedMedia.push(await uploadPostMedia(file, userId, index));
-  }
+  const uploadedMedia = await Promise.all(files.map((file, index) => uploadPostMedia(file, userId, index)));
 
   const [createdPost] = await db.transaction(async (tx) => {
     const [insertedPost] = await tx

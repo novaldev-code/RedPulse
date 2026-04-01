@@ -1,4 +1,6 @@
 import type {
+  ConversationMessagesResponse,
+  ConversationsResponse,
   CreateCommentInput,
   CreateCommentResponse,
   CreatePostResponse,
@@ -8,6 +10,8 @@ import type {
   LoginInput,
   PublicProfileResponse,
   RegisterInput,
+  SendDirectMessageInput,
+  SendDirectMessageResponse,
   SafeUser,
   SuggestedUsersResponse,
   PostCommentsResponse,
@@ -120,6 +124,21 @@ export async function getGoogleConfig() {
 
 export async function loginWithGoogle(input: GoogleAuthInput) {
   return apiFetch<{ user: SafeUser }>("/auth/google", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function getConversations() {
+  return apiFetch<ConversationsResponse>("/api/messages/conversations");
+}
+
+export async function getConversationMessages(conversationId: string) {
+  return apiFetch<ConversationMessagesResponse>(`/api/messages/${conversationId}`);
+}
+
+export async function sendDirectMessage(userId: string, input: SendDirectMessageInput) {
+  return apiFetch<SendDirectMessageResponse>(`/api/messages/direct/${userId}`, {
     method: "POST",
     body: JSON.stringify(input)
   });

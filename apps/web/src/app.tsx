@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CreatePostInput, FeedPost, LoginInput, PublicProfile, RegisterInput, SuggestedUser } from "@redpulse/validation";
+import type {
+  ConversationSummary,
+  CreatePostInput,
+  FeedPost,
+  LoginInput,
+  PublicProfile,
+  RegisterInput,
+  SuggestedUser
+} from "@redpulse/validation";
 import {
   Bell,
   Compass,
@@ -26,6 +34,8 @@ import { ApiError } from "./lib/api";
 import { GoogleSignInButton } from "./features/auth/google-sign-in-button";
 import { FeedList } from "./features/feed/feed-list";
 import {
+  useConversationMessagesQuery,
+  useConversationsQuery,
   useCreatePostMutation,
   useCurrentUserQuery,
   useGoogleConfigQuery,
@@ -36,6 +46,7 @@ import {
   useProfileSummaryQuery,
   usePublicProfileQuery,
   useRegisterMutation,
+  useSendDirectMessageMutation,
   useSuggestedUsersQuery,
   useToggleFollowMutation
 } from "./features/feed/hooks";
@@ -51,6 +62,13 @@ type NetworkUser = {
   followersCount: number;
   postsCount: number;
   isFollowing: boolean;
+};
+
+type MessageThread = {
+  user: NetworkUser;
+  conversationId: string | null;
+  lastMessage: string | null;
+  updatedAt: string | null;
 };
 
 const initialPostState: CreatePostInput = {
@@ -157,6 +175,8 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedProfileUserId, setSelectedProfileUserId] = useState<string | null>(null);
   const [selectedMessageUserId, setSelectedMessageUserId] = useState<string | null>(null);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [messageDraft, setMessageDraft] = useState("");
   const [loginForm, setLoginForm] = useState<LoginInput>(initialLoginState);
   const [registerForm, setRegisterForm] = useState<RegisterInput>(initialRegisterState);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -173,6 +193,7 @@ export default function App() {
   const suggestedUsersQuery = useSuggestedUsersQuery(Boolean(currentUser));
   const suggestions = suggestedUsersQuery.data?.users ?? [];
   const postsQuery = usePostsQuery();
+  const conversationsQuery = useConversationsQuery(Boolean(currentUser));
   const googleConfigQuery = useGoogleConfigQuery();
   const isOwnProfile = !selectedProfileUserId || selectedProfileUserId === currentUser?.id;
   const activeProfile: PublicProfile | null =
@@ -195,6 +216,9 @@ export default function App() {
     setMediaFiles([]);
     setShowLocationField(false);
     setSelectedProfileUserId(null);
+    setSelectedConversationId(null);
+    setSelectedMessageUserId(null);
+    setMessageDraft("");
     setAuthError(null);
     setCurrentView("home");
   });
@@ -217,6 +241,10 @@ export default function App() {
   const googleLoginMutation = useGoogleLoginMutation(() => {
     setAuthError(null);
   });
+  const sendDirectMessageMutation = useSendDirectMessageMutation((conversationId) => {
+    setSelectedConversationId(conversationId);
+    setMessageDraft("");
+  });
 
   const followMutation = useToggleFollowMutation();
   const isLightTheme = themeMode === "light";
@@ -225,6 +253,7 @@ export default function App() {
   const restoringSession = currentUserQuery.isLoading;
   const googleClientId = googleConfigQuery.data?.clientId ?? "";
   const allPosts = postsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const conversations = conversationsQuery.data?.conversations ?? [];
   const canSubmitPost = Boolean(postForm.content?.trim() || mediaFiles.length > 0);
   const mediaPreviews = useMemo(
     () =>
@@ -306,6 +335,64 @@ export default function App() {
     return buildNetworkUsers(currentUser.id, suggestions, allPosts);
   }, [allPosts, currentUser, suggestions]);
 
+  const messageThreads = useMemo(() => {
+    const map = new Map<string, MessageThread>();
+
+    for (const conversation of conversations) {
+      map.set(conversation.participant.id, {
+        user: {
+          id: conversation.participant.id,
+          username: conversation.participant.username,
+          avatarUrl: conversation.participant.avatarUrl,
+          bio: conversation.participant.bio,
+          followersCount: 0,
+          postsCount: 0,
+          isFollowing: suggestions.find((user) => user.id === conversation.participant.id)?.isFollowing ?? false
+        },
+        conversationId: conversation.id,
+        lastMessage: conversation.lastMessage?.content ?? null,
+        updatedAt: conversation.updatedAt
+      });
+    }
+
+    for (const user of networkUsers) {
+      if (map.has(user.id)) {
+        continue;
+      }
+
+      map.set(user.id, {
+        user,
+        conversationId: null,
+        lastMessage: null,
+        updatedAt: null
+      });
+    }
+
+    return Array.from(map.values()).sort((left, right) => {
+      const leftTime = left.updatedAt ? new Date(left.updatedAt).getTime() : 0;
+      const rightTime = right.updatedAt ? new Date(right.updatedAt).getTime() : 0;
+
+      return rightTime - leftTime || left.user.username.localeCompare(right.user.username);
+    });
+  }, [conversations, networkUsers, suggestions]);
+
+  const selectedThread = useMemo(() => {
+    if (selectedConversationId) {
+      return messageThreads.find((thread) => thread.conversationId === selectedConversationId) ?? null;
+    }
+
+    if (selectedMessageUserId) {
+      return messageThreads.find((thread) => thread.user.id === selectedMessageUserId) ?? null;
+    }
+
+    return messageThreads[0] ?? null;
+  }, [messageThreads, selectedConversationId, selectedMessageUserId]);
+
+  const conversationMessagesQuery = useConversationMessagesQuery(
+    selectedThread?.conversationId ?? null,
+    Boolean(currentUser && selectedThread?.conversationId)
+  );
+
   const filteredUsers = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
@@ -320,10 +407,7 @@ export default function App() {
     });
   }, [networkUsers, searchQuery]);
 
-  const selectedMessageUser = useMemo(
-    () => networkUsers.find((user) => user.id === selectedMessageUserId) ?? networkUsers[0] ?? null,
-    [networkUsers, selectedMessageUserId]
-  );
+  const selectedMessageUser = selectedThread?.user ?? null;
 
   const profilePosts = useMemo(
     () => allPosts.filter((post) => post.author.id === currentUser?.id),
@@ -358,12 +442,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const firstUser = networkUsers[0];
+    const firstThread = messageThreads[0];
 
-    if (!selectedMessageUserId && firstUser) {
-      setSelectedMessageUserId(firstUser.id);
+    if (!selectedMessageUserId && !selectedConversationId && firstThread) {
+      setSelectedMessageUserId(firstThread.user.id);
+      setSelectedConversationId(firstThread.conversationId);
     }
-  }, [networkUsers, selectedMessageUserId]);
+  }, [messageThreads, selectedConversationId, selectedMessageUserId]);
 
   useEffect(() => {
     return () => {
@@ -416,6 +501,12 @@ export default function App() {
 
     setSelectedProfileUserId(userId);
     setCurrentView("profile");
+  }
+
+  function openMessages(userId: string, conversationId?: string | null) {
+    setSelectedMessageUserId(userId);
+    setSelectedConversationId(conversationId ?? null);
+    setCurrentView("messages");
   }
 
   const shellClass = isLightTheme
@@ -698,43 +789,43 @@ export default function App() {
     if (currentView === "messages") {
       return (
         <div className="space-y-6">
-          <SectionHeader title="Pesan" description="Navigasi percakapan sudah aktif. Area chat realtime bisa kita sambungkan berikutnya." />
+          <SectionHeader title="Pesan" description="DM satu-satu sekarang aktif. Pilih user lalu kirim pesan langsung dari sini." />
           <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
             <Card className={cn(surfaceClass, "p-0")}>
               <CardContent className="space-y-2 p-3">
-                {networkUsers.length === 0 ? (
+                {messageThreads.length === 0 ? (
                   <EmptyState
                     title="Belum ada percakapan"
                     description="Saat ada akun lain di jaringan Anda, daftar percakapan akan muncul di sini."
                   />
                 ) : (
-                  networkUsers.map((user) => (
+                  messageThreads.map((thread) => (
                     <div
-                      key={user.id}
+                      key={thread.user.id}
                       className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition ${
-                        selectedMessageUser?.id === user.id
+                        selectedMessageUser?.id === thread.user.id
                           ? "bg-white/[0.06] text-white"
                           : "text-white/70 hover:bg-white/[0.03] hover:text-white"
                       }`}
                     >
-                      <button className="shrink-0" onClick={() => openProfile(user.id)} type="button">
-                        <Avatar username={user.username} avatarUrl={user.avatarUrl} size="md" />
+                      <button className="shrink-0" onClick={() => openProfile(thread.user.id)} type="button">
+                        <Avatar username={thread.user.username} avatarUrl={thread.user.avatarUrl} size="md" />
                       </button>
                       <div className="min-w-0 flex-1">
                         <button
                           className="block truncate text-left text-sm font-semibold text-white transition hover:text-primary"
-                          onClick={() => openProfile(user.id)}
+                          onClick={() => openProfile(thread.user.id)}
                           type="button"
                         >
-                          @{user.username}
+                          @{thread.user.username}
                         </button>
-                        <p className="truncate text-xs text-white/42">{user.bio ?? "Akun RedPulse"}</p>
+                        <p className="truncate text-xs text-white/42">{thread.lastMessage ?? thread.user.bio ?? "Mulai percakapan baru."}</p>
                         <button
                           className="mt-2 text-xs font-medium text-white/55 transition hover:text-white"
-                          onClick={() => setSelectedMessageUserId(user.id)}
+                          onClick={() => openMessages(thread.user.id, thread.conversationId)}
                           type="button"
                         >
-                          Buka percakapan
+                          {thread.conversationId ? "Buka percakapan" : "Kirim pesan"}
                         </button>
                       </div>
                     </div>
@@ -754,18 +845,77 @@ export default function App() {
                         <p className="text-sm text-white/45">{selectedMessageUser.bio ?? "Siap untuk terhubung."}</p>
                       </div>
                     </div>
-                    <div className="rounded-[24px] border border-white/10 bg-white/[0.02] p-5 text-sm leading-7 text-white/62">
-                      Area ini sekarang sudah bisa dinavigasi dari sidebar. Untuk saat ini belum ada backend chat realtime,
-                      tapi struktur halaman pesan sudah siap untuk kita sambungkan ke fitur DM berikutnya.
+                    <div className="space-y-3 rounded-[24px] border border-white/10 bg-white/[0.02] p-4">
+                      {conversationMessagesQuery.isLoading && selectedThread?.conversationId ? (
+                        <div className="flex items-center gap-3 text-sm text-white/62">
+                          <Loader className="h-4 w-4 animate-spin text-primary" />
+                          Memuat percakapan...
+                        </div>
+                      ) : conversationMessagesQuery.data?.messages.length ? (
+                        <div className="space-y-3">
+                          {conversationMessagesQuery.data.messages.map((message) => {
+                            const mine = message.senderId === currentUser!.id;
+
+                            return (
+                              <div key={message.id} className={cn("flex", mine ? "justify-end" : "justify-start")}>
+                                <div
+                                  className={cn(
+                                    "max-w-[85%] rounded-[22px] px-4 py-3 text-sm leading-7",
+                                    mine ? "bg-primary text-black" : "bg-white/[0.05] text-white/78"
+                                  )}
+                                >
+                                  <p>{message.content}</p>
+                                  <p className={cn("mt-2 text-[11px]", mine ? "text-black/60" : "text-white/38")}>
+                                    {new Date(message.createdAt).toLocaleString("id-ID", {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                      day: "2-digit",
+                                      month: "short"
+                                    })}
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="text-sm leading-7 text-white/62">
+                          Belum ada pesan dengan @{selectedMessageUser.username}. Kirim pesan pertama untuk memulai percakapan.
+                        </div>
+                      )}
                     </div>
-                    <div className="flex gap-3">
-                      <Button variant="outline" onClick={() => setCurrentView("search")}>
-                        Cari akun lain
-                      </Button>
-                      <Button variant="outline" onClick={() => openProfile(selectedMessageUser.id)}>
-                        Buka profil
-                      </Button>
-                    </div>
+                    <form
+                      className="space-y-3"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+
+                        if (!messageDraft.trim()) {
+                          return;
+                        }
+
+                        sendDirectMessageMutation.mutate({
+                          userId: selectedMessageUser.id,
+                          input: {
+                            content: messageDraft.trim()
+                          }
+                        });
+                      }}
+                    >
+                      <textarea
+                        className="min-h-24 w-full rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/32 focus:border-primary/45"
+                        onChange={(event) => setMessageDraft(event.target.value)}
+                        placeholder={`Kirim pesan ke @${selectedMessageUser.username}`}
+                        value={messageDraft}
+                      />
+                      <div className="flex gap-3">
+                        <Button type="submit" disabled={sendDirectMessageMutation.isPending || !messageDraft.trim()}>
+                          {sendDirectMessageMutation.isPending ? "Mengirim..." : "Kirim pesan"}
+                        </Button>
+                        <Button variant="outline" onClick={() => openProfile(selectedMessageUser.id)} type="button">
+                          Buka profil
+                        </Button>
+                      </div>
+                    </form>
                   </>
                 ) : (
                   <EmptyState title="Belum ada user" description="Daftar pesan akan aktif setelah ada akun lain yang bisa Anda pilih." />
@@ -885,7 +1035,7 @@ export default function App() {
                   >
                     {activeProfile.isFollowing ? "Batal mengikuti" : "Ikuti"}
                   </Button>
-                  <Button className="rounded-full px-5" variant="outline" onClick={() => setCurrentView("messages")}>
+                  <Button className="rounded-full px-5" variant="outline" onClick={() => openMessages(activeProfile.id)}>
                     Kirim pesan
                   </Button>
                 </div>
@@ -1504,8 +1654,30 @@ export default function App() {
         </div>
       </nav>
 
-      <div className="fixed right-4 top-4 z-30 lg:hidden">
+      <div className="fixed right-4 top-4 z-30 flex items-center gap-2 lg:hidden">
+        <button
+          className={cn(
+            "inline-flex h-11 items-center justify-center rounded-full border px-4 text-sm font-semibold shadow-[0_12px_28px_rgba(0,0,0,0.16)] backdrop-blur transition",
+            navChromeClass
+          )}
+          onClick={() => setCurrentView("more")}
+          type="button"
+        >
+          <Menu className="mr-2 h-4 w-4" />
+          Lainnya
+        </button>
         <ThemeToggle themeMode={themeMode} onToggle={() => setThemeMode(isLightTheme ? "dark" : "light")} />
+        <button
+          className={cn(
+            "inline-flex h-11 w-11 items-center justify-center rounded-full border shadow-[0_12px_28px_rgba(0,0,0,0.16)] backdrop-blur transition",
+            navChromeClass
+          )}
+          disabled={logoutMutation.isPending}
+          onClick={() => logoutMutation.mutate()}
+          type="button"
+        >
+          <LogOut className="h-4 w-4" />
+        </button>
       </div>
     </main>
   );

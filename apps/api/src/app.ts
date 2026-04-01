@@ -2,6 +2,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import cookieParser from "cookie-parser";
 import express from "express";
 import { authRouter } from "./routes/auth.js";
+import { messagesRouter } from "./routes/messages.js";
 import { postsRouter } from "./routes/posts.js";
 import { usersRouter } from "./routes/users.js";
 import { applyCors } from "./lib/cors.js";
@@ -28,6 +29,7 @@ app.get("/health", (_request, response) => {
 });
 
 app.use(authRouter);
+app.use(messagesRouter);
 app.use(postsRouter);
 app.use(usersRouter);
 
