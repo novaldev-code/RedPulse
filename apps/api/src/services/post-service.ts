@@ -8,7 +8,7 @@ import type {
   PostMedia,
   ToggleLikeResponse
 } from "@redpulse/validation";
-import { uploadPostMedia } from "../lib/media.js";
+import { uploadPostMedia, type UploadMediaFile } from "../lib/media.js";
 
 const defaultLimit = 10;
 
@@ -326,7 +326,7 @@ export async function getComments(postId: string, viewerId?: string | null) {
   );
 }
 
-export async function createPost(input: CreatePostInput, userId: string, files: Express.Multer.File[] = []) {
+export async function createPost(input: CreatePostInput, userId: string, files: UploadMediaFile[] = []) {
   const db = getDb();
 
   const uploadedMedia: Array<{ url: string; type: "image" | "video"; sortOrder: number }> = [];

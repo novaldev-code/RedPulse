@@ -2,6 +2,11 @@ import { v2 as cloudinary, type UploadApiResponse, type UploadApiErrorResponse }
 
 let configured = false;
 
+export type UploadMediaFile = {
+  mimetype: string;
+  buffer: Buffer;
+};
+
 function ensureCloudinaryConfig() {
   if (configured) {
     return;
@@ -29,7 +34,7 @@ export function isSupportedMediaMimeType(mimeType: string) {
   return mimeType.startsWith("image/") || mimeType.startsWith("video/");
 }
 
-export async function uploadPostMedia(file: Express.Multer.File, userId: string, sortOrder: number) {
+export async function uploadPostMedia(file: UploadMediaFile, userId: string, sortOrder: number) {
   ensureCloudinaryConfig();
 
   const resourceType = file.mimetype.startsWith("video/") ? "video" : "image";
