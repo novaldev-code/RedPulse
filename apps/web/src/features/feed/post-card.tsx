@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
 import { Bookmark, Heart, MapPin, MessageCircle, SendHorizontal } from "lucide-react";
 import type { FeedPost } from "@redpulse/validation";
-import { Button, Card, CardContent, CardFooter, CardHeader, cn } from "@redpulse/ui";
+import { Button, cn } from "@redpulse/ui";
 import { ApiError } from "../../lib/api";
 import { useCommentsQuery, useCreateCommentMutation } from "./hooks";
+
+const WIN_FONT: React.CSSProperties = {
+  fontFamily: "Tahoma, 'MS Sans Serif', Arial, sans-serif",
+  fontSize: 11
+};
 
 type PostCardProps = {
   post: FeedPost;
@@ -17,18 +22,10 @@ type PostCardProps = {
 function getRelativePostTime(createdAt: string) {
   const diffMs = Date.now() - new Date(createdAt).getTime();
   const diffMinutes = Math.max(1, Math.floor(diffMs / 60000));
-
-  if (diffMinutes < 60) {
-    return `${diffMinutes}m`;
-  }
-
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
   const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) {
-    return `${diffHours}h`;
-  }
-
-  const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays}d`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${Math.floor(diffHours / 24)}d ago`;
 }
 
 export function PostCard({ post, onLike, liking, canLike, onRequireAuth, onOpenProfile }: PostCardProps) {
@@ -40,270 +37,216 @@ export function PostCard({ post, onLike, liking, canLike, onRequireAuth, onOpenP
   const createCommentMutation = useCreateCommentMutation(post.id);
 
   useEffect(() => {
-    if (!shareFeedback) {
-      return;
-    }
-
+    if (!shareFeedback) return;
     const timeout = window.setTimeout(() => setShareFeedback(null), 2400);
-
     return () => window.clearTimeout(timeout);
   }, [shareFeedback]);
 
   async function handleShare() {
     const shareUrl = `${window.location.origin}/?post=${post.id}`;
-    const shareText = [post.content, post.location ? `Lokasi: ${post.location}` : null].filter(Boolean).join("\n");
-
+    const shareText = [post.content, post.location ? `Location: ${post.location}` : null].filter(Boolean).join("\n");
     try {
       if (navigator.share) {
-        await navigator.share({
-          title: `Post dari @${post.author.username}`,
-          text: shareText || `Lihat post terbaru dari @${post.author.username} di RedPulse`,
-          url: shareUrl
-        });
-        setShareFeedback("Sheet share sudah dibuka.");
+        await navigator.share({ title: `Post by @${post.author.username}`, text: shareText || `See this post by @${post.author.username} on RedPulse`, url: shareUrl });
+        setShareFeedback("Share dialog opened.");
         return;
       }
-
       await navigator.clipboard.writeText(`${shareText ? `${shareText}\n` : ""}${shareUrl}`);
-      setShareFeedback("Link post disalin.");
+      setShareFeedback("Link copied.");
     } catch {
-      setShareFeedback("Share belum berhasil. Coba lagi.");
+      setShareFeedback("Share failed. Try again.");
     }
   }
 
   return (
-    <Card className="overflow-hidden rounded-[22px] border-border bg-card p-0 shadow-[0_14px_34px_rgba(0,0,0,0.14)] md:rounded-[30px] md:shadow-[0_16px_44px_rgba(0,0,0,0.18)]">
-      <CardHeader className="gap-3 px-3.5 pb-3 pt-3.5 md:gap-4 md:px-5 md:pb-4 md:pt-5">
-        <div className="flex items-center gap-3">
-          <button className="shrink-0" onClick={() => onOpenProfile?.(post.author.id)} type="button">
-            {post.author.avatarUrl ? (
-              <img
-                alt={post.author.username}
-                className="h-10 w-10 rounded-full border border-border object-cover md:h-11 md:w-11"
-                src={post.author.avatarUrl}
-              />
-            ) : (
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-primary/30 bg-primary/10 text-sm font-bold text-primary md:h-11 md:w-11">
-                {post.author.username.slice(0, 2).toUpperCase()}
-              </div>
-            )}
-          </button>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                className="text-[15px] font-bold tracking-tight text-foreground transition hover:text-primary"
-                onClick={() => onOpenProfile?.(post.author.id)}
-                type="button"
-              >
-                {post.author.username}
-              </button>
-              <span className="text-xs text-foreground/22">•</span>
-              <span className="text-xs font-medium uppercase tracking-[0.12em] text-foreground/38">
-                {getRelativePostTime(post.createdAt)}
-              </span>
+    /* Win2K window */
+    <div className="win-window overflow-hidden">
+      {/* title bar */}
+      <div className="win-titlebar">
+        <button
+          className="shrink-0"
+          onClick={() => onOpenProfile?.(post.author.id)}
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
+          type="button"
+        >
+          {post.author.avatarUrl ? (
+            <img alt={post.author.username} className="h-4 w-4 object-cover" src={post.author.avatarUrl} />
+          ) : (
+            <div className="flex h-4 w-4 items-center justify-center bg-white/20 text-[8px] font-bold text-white">
+              {post.author.username.slice(0, 2).toUpperCase()}
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.22em] text-foreground/28">
-              <span>{post.type}</span>
-              {post.location ? (
-                <>
-                  <span>•</span>
-                  <span className="inline-flex items-center gap-1 normal-case tracking-normal text-foreground/42">
-                    <MapPin className="h-3.5 w-3.5 text-primary" />
-                    {post.location}
-                  </span>
-                </>
-              ) : null}
-            </div>
-          </div>
-          <button
-            className="rounded-full px-2 py-1 text-foreground/45 transition hover:bg-foreground/5 hover:text-foreground"
-            type="button"
-          >
-            ...
-          </button>
+          )}
+        </button>
+        <button
+          className="truncate text-[11px] font-bold text-white hover:underline"
+          onClick={() => onOpenProfile?.(post.author.id)}
+          style={{ ...WIN_FONT, background: "none", border: "none", cursor: "pointer" }}
+          type="button"
+        >
+          @{post.author.username}
+        </button>
+        <span className="ml-1 text-[10px] text-white/70" style={WIN_FONT}>{getRelativePostTime(post.createdAt)}</span>
+        {post.location && (
+          <span className="ml-2 flex items-center gap-1 text-[10px] text-white/70" style={WIN_FONT}>
+            <MapPin className="h-3 w-3" />{post.location}
+          </span>
+        )}
+        {/* fake window buttons */}
+        <div className="ml-auto flex gap-[2px]">
+          {["_", "□", "✕"].map((lbl) => (
+            <button
+              key={lbl}
+              className="win-raised flex h-[14px] w-[16px] items-center justify-center text-[9px] text-black"
+              style={{ fontFamily: "Marlett, sans-serif", lineHeight: 1 }}
+              type="button"
+            >
+              {lbl}
+            </button>
+          ))}
         </div>
-      </CardHeader>
+      </div>
 
-      <CardContent className="space-y-0 px-3.5 pt-0 md:px-5">
-        {post.media.length > 0 ? (
-          <div className="grid gap-2.5 border-y border-border py-3.5 md:gap-3 md:py-5">
+      {/* body */}
+      <div className="p-2 space-y-2">
+        {/* media */}
+        {post.media.length > 0 && (
+          <div className="space-y-1">
             {post.media.map((item) => (
-              <div key={item.id} className="overflow-hidden rounded-[20px] border border-border bg-background md:rounded-[24px]">
+              <div key={item.id} className="win-sunken overflow-hidden">
                 {item.type === "video" ? (
-                  <video className="max-h-[540px] w-full object-cover" controls playsInline preload="metadata" src={item.url} />
+                  <video className="max-h-[400px] w-full object-cover" controls playsInline preload="metadata" src={item.url} />
                 ) : (
-                  <img alt={post.content ?? `${post.author.username} media`} className="max-h-[540px] w-full object-cover" src={item.url} />
+                  <img alt={post.content ?? `${post.author.username} media`} className="max-h-[400px] w-full object-cover" src={item.url} />
                 )}
               </div>
             ))}
           </div>
-        ) : null}
-        {post.content ? (
-          <div className="border-b border-border py-3.5 md:py-5">
-            <p className="text-pretty text-[14px] leading-6 text-foreground/88 md:text-[15px] md:leading-7">{post.content}</p>
-          </div>
-        ) : null}
-      </CardContent>
+        )}
 
-      <CardFooter className="flex-col items-stretch gap-3 px-3.5 pb-3.5 pt-3.5 md:px-5 md:pb-5 md:pt-4">
+        {/* content */}
+        {post.content && (
+          <p className="text-[11px] leading-5 text-black" style={WIN_FONT}>{post.content}</p>
+        )}
+
+        {/* action toolbar */}
+        <div className="win-separator" />
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1">
+            {/* like */}
             <button
-              className={cn(
-                "rounded-full p-2 text-foreground/82 transition duration-200 hover:scale-105 hover:bg-foreground/5 active:scale-95",
-                post.likedByMe && "animate-soft-pulse bg-primary/10 text-primary shadow-[0_8px_20px_rgba(255,0,0,0.14)]"
-              )}
+              className={cn("win-toolbar-btn flex items-center gap-1 text-[11px]", post.likedByMe ? "text-[#cc0000]" : "text-black")}
               disabled={liking}
-              onClick={() => {
-                if (!canLike) {
-                  onRequireAuth?.();
-                  return;
-                }
-
-                onLike(post.id);
-              }}
+              onClick={() => { if (!canLike) { onRequireAuth?.(); return; } onLike(post.id); }}
+              style={WIN_FONT}
               type="button"
             >
-              <Heart className={cn("h-5 w-5", post.likedByMe && "fill-current")} />
+              <Heart className={cn("h-3.5 w-3.5", post.likedByMe && "fill-current")} />
+              <span>{post.likeCount} Pulse</span>
             </button>
+            {/* comment */}
             <button
-              className={cn(
-                "rounded-full p-2 text-foreground/72 transition duration-200 hover:scale-105 hover:bg-foreground/5 hover:text-foreground active:scale-95",
-                showComments && "bg-foreground/6 text-foreground"
-              )}
-              onClick={() => setShowComments((current) => !current)}
+              className={cn("win-toolbar-btn flex items-center gap-1 text-[11px]", showComments ? "win-pressed" : "text-black")}
+              onClick={() => setShowComments((v) => !v)}
+              style={WIN_FONT}
               type="button"
             >
-              <MessageCircle className="h-5 w-5" />
+              <MessageCircle className="h-3.5 w-3.5" />
+              <span>{post.commentCount}</span>
             </button>
+            {/* share */}
             <button
-              className="rounded-full p-2 text-foreground/72 transition duration-200 hover:scale-105 hover:bg-foreground/5 hover:text-foreground active:scale-95"
-              onClick={() => {
-                void handleShare();
-              }}
+              className="win-toolbar-btn flex items-center gap-1 text-[11px] text-black"
+              onClick={() => void handleShare()}
+              style={WIN_FONT}
               type="button"
             >
-              <SendHorizontal className="h-5 w-5" />
+              <SendHorizontal className="h-3.5 w-3.5" />
+              Share
             </button>
           </div>
-          <button className="rounded-full p-2 text-foreground/72 transition duration-200 hover:scale-105 hover:bg-foreground/5 hover:text-foreground active:scale-95" type="button">
-            <Bookmark className="h-5 w-5" />
+          <button className="win-toolbar-btn text-[11px] text-black" style={WIN_FONT} type="button">
+            <Bookmark className="h-3.5 w-3.5" />
           </button>
         </div>
 
-        <div className="space-y-1 px-1">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-            <p className="text-sm font-bold text-foreground">{post.likeCount} Pulse</p>
-            <button
-              className="text-sm font-semibold text-foreground/62 transition hover:text-foreground"
-              onClick={() => setShowComments(true)}
-              type="button"
-            >
-              {post.commentCount} komentar
-            </button>
-          </div>
-          <p className="text-[11px] uppercase tracking-[0.2em] text-foreground/32">
-            {canLike ? "Interaksi aktif untuk like, komentar, dan share" : "Login untuk memberi Pulse dan komentar"}
-          </p>
-          {shareFeedback ? <p className="text-xs font-medium text-primary">{shareFeedback}</p> : null}
-        </div>
+        {shareFeedback && (
+          <p className="text-[10px] text-[#0000cc]" style={WIN_FONT}>{shareFeedback}</p>
+        )}
 
-        {showComments ? (
-          <div className="space-y-4 rounded-[18px] border border-border bg-background/65 p-3.5 md:rounded-[22px] md:p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-foreground">Komentar</p>
-                <p className="text-xs text-foreground/45">Balasan tersimpan sebagai thread reply di database.</p>
-              </div>
+        {/* comments panel */}
+        {showComments && (
+          <div className="win-sunken space-y-2 p-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-black" style={WIN_FONT}>Comments</span>
               <button
-                className="text-xs font-semibold uppercase tracking-[0.18em] text-foreground/35 transition hover:text-foreground"
+                className="text-[10px] text-[#0000cc] hover:underline"
                 onClick={() => setShowComments(false)}
+                style={WIN_FONT}
                 type="button"
               >
-                Tutup
+                Close
               </button>
             </div>
 
-            <div className="space-y-3">
-              {commentsQuery.isLoading ? (
-                <p className="text-sm text-foreground/55">Memuat komentar...</p>
-              ) : commentsQuery.data?.comments.length ? (
-                commentsQuery.data.comments.map((comment) => (
-                  <div key={comment.id} className="rounded-[18px] border border-border bg-card/70 px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-foreground">@{comment.author.username}</p>
-                        <p className="mt-1 text-xs text-foreground/40">{getRelativePostTime(comment.createdAt)}</p>
-                      </div>
-                      <span className="text-xs font-medium text-foreground/36">{comment.likeCount} Pulse</span>
-                    </div>
-                    <p className="mt-3 text-sm leading-7 text-foreground/82">{comment.content ?? ""}</p>
+            {commentsQuery.isLoading ? (
+              <p className="text-[11px] text-[#808080]" style={WIN_FONT}>Loading comments...</p>
+            ) : commentsQuery.data?.comments.length ? (
+              commentsQuery.data.comments.map((comment) => (
+                <div key={comment.id} className="win-raised p-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-black" style={WIN_FONT}>@{comment.author.username}</span>
+                    <span className="text-[10px] text-[#808080]" style={WIN_FONT}>{getRelativePostTime(comment.createdAt)} · {comment.likeCount} Pulse</span>
                   </div>
-                ))
-              ) : (
-                <div className="rounded-[18px] border border-border bg-card/70 px-4 py-4 text-sm leading-7 text-foreground/55">
-                  Belum ada komentar. Jadilah orang pertama yang membuka percakapan di post ini.
+                  <p className="mt-1 text-[11px] text-black" style={WIN_FONT}>{comment.content ?? ""}</p>
                 </div>
-              )}
-            </div>
+              ))
+            ) : (
+              <p className="text-[11px] text-[#808080]" style={WIN_FONT}>No comments yet. Be the first to comment.</p>
+            )}
 
             {canLike ? (
               <form
-                className="space-y-3"
-                onSubmit={(event) => {
-                  event.preventDefault();
-
+                className="space-y-1"
+                onSubmit={(e) => {
+                  e.preventDefault();
                   const content = commentDraft.trim();
-                  if (!content) {
-                    setCommentError("Komentar tidak boleh kosong.");
-                    return;
-                  }
-
+                  if (!content) { setCommentError("Comment cannot be empty."); return; }
                   setCommentError(null);
                   createCommentMutation.mutate(
                     { content },
                     {
-                      onSuccess: () => {
-                        setCommentDraft("");
-                      },
-                      onError: (error) => {
-                        if (error instanceof ApiError) {
-                          setCommentError(error.message);
-                          return;
-                        }
-
-                        setCommentError("Komentar belum berhasil dikirim.");
-                      }
+                      onSuccess: () => setCommentDraft(""),
+                      onError: (err) => setCommentError(err instanceof ApiError ? err.message : "Failed to post comment.")
                     }
                   );
                 }}
               >
                 <textarea
-                  className="min-h-24 w-full rounded-[18px] border border-border bg-card/70 px-4 py-3 text-sm text-foreground outline-none transition placeholder:text-foreground/35 focus:border-primary/30 focus:bg-card"
+                  className="win-sunken w-full resize-none p-1.5 text-[11px] text-black"
                   maxLength={220}
-                  onChange={(event) => setCommentDraft(event.target.value)}
-                  placeholder="Tulis komentar yang relevan dan bikin percakapan hidup..."
+                  onChange={(e) => setCommentDraft(e.target.value)}
+                  placeholder="Write a comment..."
+                  rows={3}
+                  style={WIN_FONT}
                   value={commentDraft}
                 />
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <span className="text-xs uppercase tracking-[0.18em] text-foreground/35">{commentDraft.length}/220</span>
-                  <Button className="rounded-full px-5" disabled={createCommentMutation.isPending} type="submit">
-                    {createCommentMutation.isPending ? "Mengirim..." : "Kirim komentar"}
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-[#808080]" style={WIN_FONT}>{commentDraft.length}/220</span>
+                  <Button size="sm" disabled={createCommentMutation.isPending} type="submit">
+                    {createCommentMutation.isPending ? "Sending..." : "OK"}
                   </Button>
                 </div>
-                {commentError ? <p className="text-sm text-red-500">{commentError}</p> : null}
+                {commentError && <p className="text-[10px] text-[#cc0000]" style={WIN_FONT}>{commentError}</p>}
               </form>
             ) : (
-              <div className="space-y-3 rounded-[18px] border border-border bg-card/70 px-4 py-4">
-                <p className="text-sm text-foreground/62">Login dulu supaya Anda bisa ikut komentar di post ini.</p>
-                <Button variant="outline" onClick={() => onRequireAuth?.()}>
-                  Buka login
-                </Button>
+              <div className="space-y-1">
+                <p className="text-[11px] text-[#808080]" style={WIN_FONT}>Sign in to leave a comment.</p>
+                <Button size="sm" variant="outline" onClick={() => onRequireAuth?.()}>Sign in</Button>
               </div>
             )}
           </div>
-        ) : null}
-      </CardFooter>
-    </Card>
+        )}
+      </div>
+    </div>
   );
 }

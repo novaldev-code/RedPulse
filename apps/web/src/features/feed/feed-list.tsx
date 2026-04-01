@@ -1,7 +1,12 @@
-import { Sparkles } from "lucide-react";
-import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from "@redpulse/ui";
+import { Loader } from "lucide-react";
+import { Button } from "@redpulse/ui";
 import { usePostsQuery, useToggleLikeMutation } from "./hooks";
 import { PostCard } from "./post-card";
+
+const WIN_FONT: React.CSSProperties = {
+  fontFamily: "Tahoma, 'MS Sans Serif', Arial, sans-serif",
+  fontSize: 11
+};
 
 type FeedListProps = {
   canLike: boolean;
@@ -16,59 +21,38 @@ export function FeedList({ canLike, onRequireAuth, onCreateFirstPost, onOpenProf
 
   if (postsQuery.isLoading) {
     return (
-      <Card className="bg-[#090909]">
-        <CardHeader>
-          <CardTitle>Memuat feed...</CardTitle>
-          <CardDescription>Mengambil update terbaru dari timeline RedPulse.</CardDescription>
-        </CardHeader>
-      </Card>
+      <div className="win-sunken flex items-center gap-2 p-3">
+        <Loader className="h-4 w-4 animate-spin text-[#0a246a]" />
+        <span className="text-[11px] text-[#808080]" style={WIN_FONT}>Loading feed...</span>
+      </div>
     );
   }
 
   if (postsQuery.isError) {
     return (
-      <Card className="bg-[#090909]">
-        <CardHeader>
-          <CardTitle>Feed belum tersedia</CardTitle>
-          <CardDescription>
-            {(postsQuery.error as Error).message || "Timeline tidak bisa dimuat sekarang."}
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      <div className="win-sunken border-l-[3px] border-l-[#cc0000] p-2 text-[11px] text-[#cc0000]" style={WIN_FONT}>
+        Feed error: {(postsQuery.error as Error).message || "Timeline could not be loaded."}
+      </div>
     );
   }
 
   const items = postsQuery.data?.pages.flatMap((page) => page.items) ?? [];
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-2">
       {items.length === 0 ? (
-        <Card className="overflow-hidden bg-[#090909]">
-          <CardHeader className="pb-3">
-            <div className="animate-soft-float flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[0.04] text-primary shadow-[0_18px_40px_rgba(255,0,0,0.08)]">
-              <Sparkles className="h-6 w-6" />
+        <div className="win-sunken p-3 text-center">
+          <p className="text-[13px] font-bold text-black" style={WIN_FONT}>Feed is empty</p>
+          <p className="mt-1 text-[11px] text-[#808080]" style={WIN_FONT}>
+            No public posts yet. Once the first post appears, your timeline will come alive.
+          </p>
+          {onCreateFirstPost && (
+            <div className="mt-3 flex justify-center gap-2">
+              <Button size="sm" onClick={onCreateFirstPost}>Create first post</Button>
+              <Button size="sm" variant="outline" onClick={() => postsQuery.refetch()}>Refresh</Button>
             </div>
-            <div className="space-y-2 pt-3">
-              <CardTitle className="text-[26px] font-black tracking-tight">Feed masih tenang</CardTitle>
-              <CardDescription className="max-w-lg text-sm leading-7 text-white/58">
-                Belum ada postingan publik. Begitu post pertama muncul, timeline ini akan langsung terasa hidup.
-              </CardDescription>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4 pt-0">
-            <div className="rounded-[22px] bg-white/[0.03] px-4 py-4 text-sm leading-7 text-white/58">
-              Feed ini hanya menampilkan data nyata dari user. Tidak ada seed dummy yang menutupi pengalaman pertama Anda.
-            </div>
-            {onCreateFirstPost ? (
-              <div className="flex flex-wrap gap-3">
-                <Button onClick={onCreateFirstPost}>Buat post pertama</Button>
-                <Button variant="outline" onClick={() => postsQuery.refetch()}>
-                  Muat ulang feed
-                </Button>
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
+          )}
+        </div>
       ) : (
         items.map((post) => (
           <PostCard
@@ -83,13 +67,13 @@ export function FeedList({ canLike, onRequireAuth, onCreateFirstPost, onOpenProf
         ))
       )}
 
-      {postsQuery.hasNextPage ? (
-        <div className="flex justify-center">
-          <Button variant="outline" onClick={() => postsQuery.fetchNextPage()} disabled={postsQuery.isFetchingNextPage}>
-            {postsQuery.isFetchingNextPage ? "Memuat lagi..." : "Lihat post lainnya"}
+      {postsQuery.hasNextPage && (
+        <div className="flex justify-center pt-1">
+          <Button variant="outline" size="sm" onClick={() => postsQuery.fetchNextPage()} disabled={postsQuery.isFetchingNextPage}>
+            {postsQuery.isFetchingNextPage ? "Loading..." : "Load more posts"}
           </Button>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
